@@ -1,0 +1,16 @@
+[package]
+name = "cq-report"
+description = "Diagnostics, provenance and fidelity reporting for cross-q conversions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+cq-model = { path = "../cq-model" }
+
+[lints]
+workspace = true

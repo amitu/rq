@@ -1,0 +1,30 @@
+[package]
+name = "cross-q"
+description = "Convert API-client collections between formats, through one idealised model."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cq"
+path = "src/main.rs"
+
+[lib]
+name = "cross_q"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+cq-model = { path = "../cq-model" }
+cq-report = { path = "../cq-report" }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
