@@ -71,6 +71,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Formats => {
             println!("cross-q supported conversions:\n");
             println!("  IMPORT   curl        ✅");
+            println!("  IMPORT   postman     ✅   (Collection v2.0 / v2.1)");
             println!("  EXPORT   rq          ✅   (Requestly LOCAL_FS 1.12.0)");
             println!("\n  more importers/exporters land per the roadmap; unsupported");
             println!("  targets fail with a clear not_implemented error, never a partial write.");
@@ -94,6 +95,12 @@ fn detect_source(text: &str) -> Option<&'static str> {
     let t = text.trim_start();
     if t == "curl" || t.starts_with("curl ") || t.starts_with("curl\t") || t.starts_with("curl\\") {
         Some("curl")
+    } else if t.starts_with('{')
+        && (t.contains("schema.getpostman.com")
+            || t.contains("_postman_id")
+            || (t.contains("\"info\"") && t.contains("\"item\"")))
+    {
+        Some("postman")
     } else {
         None
     }
@@ -112,11 +119,13 @@ fn convert(input: &str, to: &str, from: Option<&str>, output: &Path) -> anyhow::
     if to != "rq" {
         anyhow::bail!("not_implemented: target format {to:?} (supported: rq)");
     }
-    if source != "curl" {
-        anyhow::bail!("not_implemented: source format {source:?} (supported: curl)");
-    }
-
-    let report = cross_q::convert_curl_to_rq(&text, output)?;
+    let report = match source.as_str() {
+        "curl" => cross_q::convert_curl_to_rq(&text, output)?,
+        "postman" => cross_q::convert_postman_to_rq(&text, output)?,
+        other => {
+            anyhow::bail!("not_implemented: source format {other:?} (supported: curl, postman)")
+        }
+    };
 
     // Machine-readable report alongside the output.
     let report_dir = output.join(".cross-q");
@@ -124,7 +133,7 @@ fn convert(input: &str, to: &str, from: Option<&str>, output: &Path) -> anyhow::
     let report_path = report_dir.join("report.json");
     fs::write(&report_path, serde_json::to_string_pretty(&report)? + "\n")?;
 
-    println!("✓ converted curl → rq  ({})", report.summary());
+    println!("✓ converted {source} → rq  ({})", report.summary());
     println!("  output: {}", output.display());
     println!("  report: {}", report_path.display());
 

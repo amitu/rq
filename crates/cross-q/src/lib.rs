@@ -7,6 +7,7 @@
 
 pub mod curl;
 pub mod emit_rq;
+pub mod postman;
 
 use std::path::Path;
 
@@ -67,6 +68,14 @@ pub fn curl_to_workspace(input: &str, report: &mut Report) -> Result<Workspace, 
 pub fn convert_curl_to_rq(input: &str, out_dir: &Path) -> anyhow::Result<Report> {
     let mut report = Report::new(Fidelity::Lossless);
     let ws = curl_to_workspace(input, &mut report).map_err(|e| anyhow::anyhow!("{e}"))?;
+    emit_rq::emit_rq(&ws, out_dir, &mut report)?;
+    Ok(report)
+}
+
+/// Convert a Postman collection (v2.0/v2.1) into a Requestly `LOCAL_FS` project.
+pub fn convert_postman_to_rq(input: &str, out_dir: &Path) -> anyhow::Result<Report> {
+    let mut report = Report::new(Fidelity::Lossless);
+    let ws = postman::parse_postman(input, &mut report).map_err(|e| anyhow::anyhow!("{e}"))?;
     emit_rq::emit_rq(&ws, out_dir, &mut report)?;
     Ok(report)
 }
