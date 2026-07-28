@@ -7,7 +7,11 @@
 
 pub mod curl;
 pub mod emit_rq;
+pub mod mappeditems;
 pub mod postman;
+pub mod rq_shape;
+
+pub use mappeditems::to_mapped_items;
 
 use std::path::Path;
 
@@ -78,6 +82,22 @@ pub fn convert_postman_to_rq(input: &str, out_dir: &Path) -> anyhow::Result<Repo
     let ws = postman::parse_postman(input, &mut report).map_err(|e| anyhow::anyhow!("{e}"))?;
     emit_rq::emit_rq(&ws, out_dir, &mut report)?;
     Ok(report)
+}
+
+/// Parse an input of a given source format into the Idealised Model. Shared by the `rq`
+/// and `mapped` conversion targets.
+pub fn build_workspace(
+    source: &str,
+    input: &str,
+    report: &mut Report,
+) -> anyhow::Result<Workspace> {
+    match source {
+        "curl" => curl_to_workspace(input, report).map_err(|e| anyhow::anyhow!("{e}")),
+        "postman" => postman::parse_postman(input, report).map_err(|e| anyhow::anyhow!("{e}")),
+        other => {
+            anyhow::bail!("not_implemented: source format {other:?} (supported: curl, postman)")
+        }
+    }
 }
 
 #[cfg(test)]
