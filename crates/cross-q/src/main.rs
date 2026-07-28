@@ -73,6 +73,9 @@ fn run() -> anyhow::Result<ExitCode> {
             println!("  IMPORT   curl        ✅");
             println!("  IMPORT   postman     ✅   (Collection v2.0 / v2.1)");
             println!("  EXPORT   rq          ✅   (Requestly LOCAL_FS 1.12.0)");
+            println!(
+                "  EXPORT   mapped      ✅   (Requestly MappedItems — the app's import contract)"
+            );
             println!("\n  more importers/exporters land per the roadmap; unsupported");
             println!("  targets fail with a clear not_implemented error, never a partial write.");
             Ok(ExitCode::SUCCESS)
@@ -113,18 +116,30 @@ fn convert(input: &str, to: &str, from: Option<&str>, output: &Path) -> anyhow::
         .map(str::to_string)
         .or_else(|| detect_source(&text).map(str::to_string));
     let source = source.ok_or_else(|| {
-        anyhow::anyhow!("could not detect source format; pass --from (supported: curl)")
+        anyhow::anyhow!("could not detect source format; pass --from (supported: curl, postman)")
     })?;
 
-    if to != "rq" {
-        anyhow::bail!("not_implemented: target format {to:?} (supported: rq)");
-    }
-    let report = match source.as_str() {
-        "curl" => cross_q::convert_curl_to_rq(&text, output)?,
-        "postman" => cross_q::convert_postman_to_rq(&text, output)?,
-        other => {
-            anyhow::bail!("not_implemented: source format {other:?} (supported: curl, postman)")
+    let report = match to {
+        "rq" => match source.as_str() {
+            "curl" => cross_q::convert_curl_to_rq(&text, output)?,
+            "postman" => cross_q::convert_postman_to_rq(&text, output)?,
+            other => {
+                anyhow::bail!("not_implemented: source format {other:?} (supported: curl, postman)")
+            }
+        },
+        // The in-memory Requestly MappedItems bundle — the shape the app's importer returns.
+        "mapped" => {
+            let mut report = cq_report::Report::new(cq_report::Fidelity::Lossless);
+            let ws = cross_q::build_workspace(&source, &text, &mut report)?;
+            let mapped = cross_q::to_mapped_items(&ws, &mut report);
+            fs::create_dir_all(output)?;
+            fs::write(
+                output.join("mapped-items.json"),
+                serde_json::to_string_pretty(&mapped)? + "\n",
+            )?;
+            report
         }
+        other => anyhow::bail!("not_implemented: target format {other:?} (supported: rq, mapped)"),
     };
 
     // Machine-readable report alongside the output.
@@ -133,7 +148,7 @@ fn convert(input: &str, to: &str, from: Option<&str>, output: &Path) -> anyhow::
     let report_path = report_dir.join("report.json");
     fs::write(&report_path, serde_json::to_string_pretty(&report)? + "\n")?;
 
-    println!("✓ converted {source} → rq  ({})", report.summary());
+    println!("✓ converted {source} → {to}  ({})", report.summary());
     println!("  output: {}", output.display());
     println!("  report: {}", report_path.display());
 

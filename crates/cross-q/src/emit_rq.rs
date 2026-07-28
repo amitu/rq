@@ -4,6 +4,9 @@
 //! `__requestly.json` marker, an `apis/` tree of one-concept-per-file request folders,
 //! and `environments/`. Shapes that don't yet have an emitter (non-HTTP protocols, some
 //! auth kinds) are recorded as `Dropped` diagnostics rather than written wrong.
+//!
+//! The IR→Requestly value mapping lives in [`crate::rq_shape`] and is shared with the
+//! in-memory `MappedItems` emitter — one mapper, two serializations.
 
 use std::fs;
 use std::io;
@@ -11,17 +14,10 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use cq_model::{
-    Auth, Body, Collection, Environment, HttpRequest, Item, Protocol, Request, Workspace,
-};
-use cq_report::{Phase, Report, Severity};
+use cq_model::{Collection, Environment, HttpRequest, Item, Protocol, Request, Workspace};
+use cq_report::{Diagnostic, Phase, Report, Severity};
 
-/// The Requestly `LOCAL_FS` schema version this emitter targets.
-pub const RQ_SCHEMA_VERSION: &str = "1.12.0";
-
-fn schema_url(base: &str) -> String {
-    format!("https://assets.requestly.com/local/v{RQ_SCHEMA_VERSION}/{base}.json")
-}
+use crate::rq_shape::{self, AuthMap};
 
 fn write_json(path: &Path, value: &Value) -> io::Result<()> {
     // serde_json::Map is a BTreeMap by default → sorted keys → byte-stable output.
@@ -54,8 +50,8 @@ pub fn emit_rq(ws: &Workspace, out_dir: &Path, report: &mut Report) -> io::Resul
     write_json(
         &out_dir.join("__requestly.json"),
         &json!({
-            "$schema": schema_url("project"),
-            "version": RQ_SCHEMA_VERSION,
+            "$schema": rq_shape::schema_url("project"),
+            "version": rq_shape::RQ_SCHEMA_VERSION,
             "include": [],
             "exclude": [],
         }),
@@ -88,7 +84,7 @@ fn emit_collection(coll: &Collection, parent: &Path, report: &mut Report) -> io:
         write_json(
             &d.join("__metadata.json"),
             &json!({
-                "$schema": schema_url("metadata"),
+                "$schema": rq_shape::schema_url("metadata"),
                 "id": coll.meta.id,
                 "name": coll.meta.name,
                 "type": "collection",
@@ -96,7 +92,10 @@ fn emit_collection(coll: &Collection, parent: &Path, report: &mut Report) -> io:
             }),
         )?;
         if !coll.variables.is_empty() {
-            write_json(&d.join("__variables.json"), &variables_to_json(coll))?;
+            write_json(
+                &d.join("__variables.json"),
+                &rq_shape::variables_record(&coll.variables),
+            )?;
         }
         d
     };
@@ -131,30 +130,53 @@ fn emit_http(req: &Request, http: &HttpRequest, dir: &Path, report: &mut Report)
     write_json(
         &dir.join("__metadata.json"),
         &json!({
-            "$schema": schema_url("metadata"),
+            "$schema": rq_shape::schema_url("metadata"),
             "id": req.meta.id,
             "name": req.meta.name,
             "type": "api",
             "entryType": "http",
             "url": http.url.raw,
             "method": String::from(http.method.clone()),
-            "contentType": content_type_selector(&http.body),
+            "contentType": rq_shape::content_type_selector(&http.body),
             "rank": req.meta.rank,
         }),
     )?;
 
     if !http.headers.is_empty() {
-        write_json(&dir.join("__headers.json"), &kvs_to_json(&http.headers))?;
+        write_json(
+            &dir.join("__headers.json"),
+            &rq_shape::kvs_to_json(&http.headers),
+        )?;
     }
     if !http.query.is_empty() {
-        write_json(&dir.join("__query-params.json"), &kvs_to_json(&http.query))?;
+        write_json(
+            &dir.join("__query-params.json"),
+            &rq_shape::kvs_to_json(&http.query),
+        )?;
+    }
+    if !http.path_variables.is_empty() {
+        write_json(
+            &dir.join("__path-variables.json"),
+            &rq_shape::path_vars_to_json(&http.path_variables),
+        )?;
     }
     if let Some(body) = &http.body {
-        write_json(&dir.join("__body.json"), &body_to_json(body))?;
+        write_json(&dir.join("__body.json"), &rq_shape::body_to_json(body))?;
     }
     if let Some(auth) = &req.auth {
-        if let Some(v) = auth_to_rq(auth, report, req) {
-            write_json(&dir.join("__auth.json"), &v)?;
+        match rq_shape::auth_to_rq(auth) {
+            AuthMap::Mapped(v) => {
+                write_json(&dir.join("__auth.json"), &v)?;
+            }
+            AuthMap::NoAuth => {}
+            AuthMap::Unsupported(desc) => report.dropped(
+                Phase::Emit,
+                req.meta.source.clone(),
+                format!(
+                    "auth kind not yet emittable to Requestly, dropped from '{}': {desc}",
+                    req.meta.name
+                ),
+            ),
         }
     }
     if let Some(desc) = &req.meta.description {
@@ -171,7 +193,7 @@ fn emit_http(req: &Request, http: &HttpRequest, dir: &Path, report: &mut Report)
         }
     }
 
-    report.push(cq_report::Diagnostic::new(
+    report.push(Diagnostic::new(
         Severity::Ok,
         Phase::Emit,
         req.meta.source.clone(),
@@ -180,146 +202,19 @@ fn emit_http(req: &Request, http: &HttpRequest, dir: &Path, report: &mut Report)
     Ok(())
 }
 
-fn content_type_selector(body: &Option<Body>) -> &'static str {
-    match body {
-        None | Some(Body::None) => "none",
-        Some(Body::Raw { media_type, .. }) => {
-            if media_type.contains("json") {
-                "json"
-            } else {
-                "raw"
-            }
-        }
-        Some(Body::UrlEncoded { .. }) => "form",
-        Some(Body::FormData { .. }) => "multipart/form-data",
-        Some(Body::Binary { .. }) => "binary",
-        Some(Body::Graphql { .. }) => "raw",
-    }
-}
-
-fn body_to_json(body: &Body) -> Value {
-    match body {
-        Body::None => json!({ "contentType": "none" }),
-        Body::Raw { text, media_type } => json!({
-            "contentType": if media_type.contains("json") { "json" } else { "raw" },
-            "raw": text,
-            "rawContentType": media_type,
-        }),
-        Body::UrlEncoded { fields } => json!({
-            "contentType": "form",
-            "formUrlEncoded": kvs_to_json(fields),
-        }),
-        Body::FormData { .. } => json!({
-            "contentType": "multipart/form-data",
-            "formData": [],
-        }),
-        Body::Binary { .. } => json!({ "contentType": "binary" }),
-        Body::Graphql {
-            query, variables, ..
-        } => json!({
-            "contentType": "raw",
-            "raw": query,
-            "graphqlVariables": variables,
-        }),
-    }
-}
-
-fn kvs_to_json(kvs: &[cq_model::KeyValue]) -> Value {
-    let arr: Vec<Value> = kvs
-        .iter()
-        .enumerate()
-        .map(|(i, kv)| {
-            json!({
-                "id": i as u64 + 1,
-                "key": kv.key,
-                "value": kv.value,
-                "isEnabled": kv.enabled,
-            })
-        })
-        .collect();
-    Value::Array(arr)
-}
-
-fn variables_to_json(coll: &Collection) -> Value {
-    let mut map = serde_json::Map::new();
-    for v in &coll.variables {
-        map.insert(
-            v.key.clone(),
-            json!({
-                "syncValue": v.value,
-                "type": format!("{:?}", v.data_type).to_lowercase(),
-                "isEnabled": v.enabled,
-            }),
-        );
-    }
-    Value::Object(map)
-}
-
-fn auth_to_rq(auth: &Auth, report: &mut Report, req: &Request) -> Option<Value> {
-    match auth {
-        Auth::None => None,
-        Auth::Inherit => Some(json!({ "type": "inherit" })),
-        Auth::Basic { username, password } => Some(json!({
-            "type": "basic_auth",
-            "username": username,
-            "password": password,
-        })),
-        Auth::Bearer {
-            token,
-            header_prefix,
-        } => Some(json!({
-            "type": "bearer_token",
-            "token": token,
-            "headerPrefix": header_prefix,
-        })),
-        Auth::ApiKey {
-            key,
-            value,
-            placement,
-        } => Some(json!({
-            "type": "api_key",
-            "key": key,
-            "value": value,
-            "placement": format!("{placement:?}").to_lowercase(),
-        })),
-        other => {
-            report.dropped(
-                Phase::Emit,
-                req.meta.source.clone(),
-                format!(
-                    "auth kind not yet emittable to Requestly, dropped from '{}': {other:?}",
-                    req.meta.name
-                ),
-            );
-            None
-        }
-    }
-}
-
 fn emit_environment(env: &Environment, dir: &Path) -> io::Result<()> {
     let filename = if env.is_global {
         "__global.json".to_string()
     } else {
         format!("{}.json", sanitize(&env.meta.name))
     };
-    let mut vars = serde_json::Map::new();
-    for v in &env.variables {
-        vars.insert(
-            v.key.clone(),
-            json!({
-                "syncValue": v.value,
-                "type": format!("{:?}", v.data_type).to_lowercase(),
-                "isEnabled": v.enabled,
-            }),
-        );
-    }
     write_json(
         &dir.join(filename),
         &json!({
-            "$schema": schema_url("environment"),
+            "$schema": rq_shape::schema_url("environment"),
             "id": env.meta.id,
             "name": env.meta.name,
-            "variables": Value::Object(vars),
+            "variables": rq_shape::variables_record(&env.variables),
         }),
     )
 }
@@ -327,7 +222,7 @@ fn emit_environment(env: &Environment, dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cq_model::{KeyValue, Method, ModelHeader, RecordMeta, SourceFormat, Url};
+    use cq_model::{Auth, KeyValue, Method, ModelHeader, RecordMeta, SourceFormat, Url};
     use cq_report::Fidelity;
 
     fn one_request_ws() -> Workspace {
@@ -366,13 +261,11 @@ mod tests {
         let mut report = Report::new(Fidelity::Lossless);
         emit_rq(&one_request_ws(), dir.path(), &mut report).unwrap();
 
-        // project marker
         let marker = dir.path().join("__requestly.json");
         assert!(marker.exists());
         let marker_v: Value = serde_json::from_str(&fs::read_to_string(marker).unwrap()).unwrap();
         assert_eq!(marker_v["version"], json!("1.12.0"));
 
-        // root request emitted directly under apis/ (empty collection name)
         let reqdir = dir.path().join("apis").join("issues");
         let meta: Value =
             serde_json::from_str(&fs::read_to_string(reqdir.join("__metadata.json")).unwrap())
