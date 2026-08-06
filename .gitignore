@@ -11,3 +11,7 @@ Cargo.lock.orig
 
 # Local env
 .env
+
+# wasm-pack scratch output (the shipped copy lives in packages/cross-q/engine{,-node})
+/crates/cq-wasm/pkg
+/crates/cq-wasm/pkg-node

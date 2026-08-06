@@ -1,0 +1,37 @@
+{
+  "name": "@requestly/cross-q",
+  "version": "0.1.0",
+  "description": "The cross-q import engine — parse API-client collections (Postman, cURL, …) into the Requestly MappedItems shape. WebAssembly core, strings in / typed objects out.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amitu/rq.git",
+    "directory": "packages/cross-q"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "imports": {
+    "#engine": {
+      "requestly-cli-node": "./engine-node/cross_q_engine.js",
+      "node": "./engine-node/cross_q_engine.js",
+      "default": "./engine/cross_q_engine.js"
+    }
+  },
+  "files": [
+    "src",
+    "engine",
+    "engine-node"
+  ],
+  "scripts": {
+    "build:wasm": "wasm-pack build ../../crates/cq-wasm --target bundler --out-dir ../../packages/cross-q/engine --out-name cross_q_engine && wasm-pack build ../../crates/cq-wasm --target nodejs --out-dir ../../packages/cross-q/engine-node --out-name cross_q_engine",
+    "test": "node test/smoke.mjs"
+  }
+}

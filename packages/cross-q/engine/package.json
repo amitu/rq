@@ -1,0 +1,23 @@
+{
+  "name": "cq-wasm",
+  "type": "module",
+  "description": "WebAssembly binding for the cross-q import engine — the boundary @requestly/cross-q ships.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/browserstack/rq"
+  },
+  "files": [
+    "cross_q_engine_bg.wasm",
+    "cross_q_engine.js",
+    "cross_q_engine_bg.js",
+    "cross_q_engine.d.ts"
+  ],
+  "main": "cross_q_engine.js",
+  "types": "cross_q_engine.d.ts",
+  "sideEffects": [
+    "./cross_q_engine.js",
+    "./snippets/*"
+  ]
+}

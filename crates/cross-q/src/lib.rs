@@ -100,6 +100,33 @@ pub fn build_workspace(
     }
 }
 
+/// Parse `content` of the given `format` and produce the Requestly `MappedItems` bundle
+/// plus the conversion [`Report`], as a single serializable value. This is the function
+/// the WASM boundary (and any host consuming the import engine) calls: input strings in,
+/// one JSON value out.
+///
+/// The returned shape is `{ "ok": true, "mapped": <MappedItems>, "report": <Report> }`
+/// on success, or `{ "ok": false, "error": <message> }` when the format is unknown or the
+/// input can't be parsed at all (a hard failure — distinct from per-item diagnostics,
+/// which ride inside `report`).
+pub fn parse_to_mapped_items(format: &str, content: &str, _file_name: &str) -> serde_json::Value {
+    let mut report = Report::new(Fidelity::Lossless);
+    match build_workspace(format, content, &mut report) {
+        Ok(ws) => {
+            let mapped = mappeditems::to_mapped_items(&ws, &mut report);
+            serde_json::json!({
+                "ok": true,
+                "mapped": mapped,
+                "report": report,
+            })
+        }
+        Err(e) => serde_json::json!({
+            "ok": false,
+            "error": e.to_string(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,6 +136,26 @@ mod tests {
         assert_eq!(slug("List Issues!"), "list-issues");
         assert_eq!(slug("///"), "request");
         assert_eq!(slug("users"), "users");
+    }
+
+    #[test]
+    fn parse_to_mapped_items_ok_shape() {
+        let out = parse_to_mapped_items(
+            "curl",
+            "curl -H 'Accept: application/json' https://api.example.com/v1/users",
+            "cmd.txt",
+        );
+        assert_eq!(out["ok"], serde_json::json!(true));
+        assert_eq!(out["mapped"]["requests"][0]["data"]["type"], serde_json::json!("http"));
+        // report is embedded and serializable
+        assert!(out["report"]["fidelity"].is_string());
+    }
+
+    #[test]
+    fn parse_to_mapped_items_unknown_format_is_soft_error() {
+        let out = parse_to_mapped_items("insomnia", "{}", "x.json");
+        assert_eq!(out["ok"], serde_json::json!(false));
+        assert!(out["error"].as_str().unwrap().contains("not_implemented"));
     }
 
     #[test]
