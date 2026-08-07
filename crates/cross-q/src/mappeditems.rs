@@ -63,10 +63,10 @@ fn walk_collection(
                 rq_shape::variables_record(&coll.variables),
             );
         }
-        if let Some(auth) = &coll.auth {
-            if let AuthMap::Mapped(v) = rq_shape::auth_to_rq(auth) {
-                data.insert("auth".into(), v);
-            }
+        // Requestly convention: a collection always carries an auth (unspecified →
+        // `inherit`), applied here in the reverse converter — see `requestly_auth_value`.
+        if let Some(v) = rq_shape::requestly_auth_value(&coll.auth) {
+            data.insert("auth".into(), v);
         }
         if let Some(scripts) = rq_shape::scripts_object(&coll.scripts) {
             data.insert("scripts".into(), scripts);
@@ -123,18 +123,26 @@ fn request_item(req: &Request, parent_temp: Option<&str>, report: &mut Report) -
     let mut data = serde_json::Map::new();
     data.insert("type".into(), json!("http"));
     data.insert("request".into(), rq_shape::http_request_object(http));
-    if let Some(auth) = &req.auth {
-        match rq_shape::auth_to_rq(auth) {
+    // Requestly convention: a request always carries an auth (unspecified → `inherit`),
+    // applied here in the reverse converter. An unmappable kind is dropped with a
+    // diagnostic rather than defaulted.
+    match &req.auth {
+        None => {
+            data.insert("auth".into(), json!({ "type": "inherit" }));
+        }
+        Some(auth) => match rq_shape::auth_to_rq(auth) {
             AuthMap::Mapped(v) => {
                 data.insert("auth".into(), v);
             }
-            AuthMap::NoAuth => {}
+            AuthMap::NoAuth => {
+                data.insert("auth".into(), json!({ "type": "no_auth" }));
+            }
             AuthMap::Unsupported(desc) => report.dropped(
                 Phase::Emit,
                 req.meta.source.clone(),
                 format!("auth kind dropped from '{}': {desc}", req.meta.name),
             ),
-        }
+        },
     }
     if let Some(scripts) = rq_shape::scripts_object(&req.scripts) {
         data.insert("scripts".into(), scripts);

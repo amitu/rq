@@ -60,13 +60,14 @@ pub fn body_to_json(body: &Body) -> Value {
 }
 
 /// Requestly `keyValuePairSchema[]` — `{ id (number), key, value, isEnabled }`.
+/// Ids are 0-based to match the app's importer.
 pub fn kvs_to_json(kvs: &[KeyValue]) -> Value {
     Value::Array(
         kvs.iter()
             .enumerate()
             .map(|(i, kv)| {
                 json!({
-                    "id": i as u64 + 1,
+                    "id": i as u64,
                     "key": kv.key,
                     "value": kv.value,
                     "isEnabled": kv.enabled,
@@ -133,6 +134,24 @@ pub enum AuthMap {
 }
 
 /// Map an IR [`Auth`] to Requestly's `authConfigSchema` shape (discriminated on `type`).
+/// Requestly's **auth convention**, applied at the reverse-conversion boundary
+/// (IR → Requestly) to both collections and requests: an *unspecified* auth (`None`) means
+/// "inherit from parent". This mirrors the app's `mapAuth(undefined) → { type: inherit }`
+/// — a Requestly-*emitter* default, NOT an IR default. The IR stays neutral (`None` =
+/// "source said nothing"); only this reverse converter injects Requestly's default. A
+/// different target's emitter would choose its own default. `Some(Auth::None)` (explicit
+/// no-auth) maps to `no_auth`; an unmappable kind yields `None` (the caller reports it).
+pub fn requestly_auth_value(auth: &Option<Auth>) -> Option<Value> {
+    match auth {
+        None => Some(json!({ "type": "inherit" })),
+        Some(a) => match auth_to_rq(a) {
+            AuthMap::Mapped(v) => Some(v),
+            AuthMap::NoAuth => Some(json!({ "type": "no_auth" })),
+            AuthMap::Unsupported(_) => None,
+        },
+    }
+}
+
 pub fn auth_to_rq(auth: &Auth) -> AuthMap {
     match auth {
         Auth::None => AuthMap::NoAuth,
@@ -145,11 +164,17 @@ pub fn auth_to_rq(auth: &Auth) -> AuthMap {
         Auth::Bearer {
             token,
             header_prefix,
-        } => AuthMap::Mapped(json!({
-            "type": "bearer_token",
-            "token": token,
-            "headerPrefix": header_prefix,
-        })),
+        } => {
+            // Tri-state header_prefix: None → omit the field entirely (Requestly's default,
+            // matches the app which never emits it); Some(x) → emit the explicit prefix.
+            let mut m = serde_json::Map::new();
+            m.insert("type".into(), json!("bearer_token"));
+            m.insert("token".into(), json!(token));
+            if let Some(p) = header_prefix {
+                m.insert("headerPrefix".into(), json!(p));
+            }
+            AuthMap::Mapped(Value::Object(m))
+        }
         Auth::ApiKey {
             key,
             value,
