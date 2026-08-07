@@ -58,6 +58,19 @@ const coerced = (res.report.diagnostics || []).filter((d) => d.severity === 'coe
 assert.ok(coerced.length >= 2, 'coercions reported');
 ok(`RQ-3458 keys coerced + reported (${coerced.length} coercions), import completed`);
 
+// 3b. Postman v1.0.0 (the legacy flat shape) — proves version support through WASM, so
+// swapping the engine into the app won't regress v1 collections.
+const v1 = JSON.stringify({
+  id: 'c', name: 'Legacy', order: ['r1'],
+  requests: [{ id: 'r1', name: 'Top', method: 'GET', url: 'https://x.test/top', headers: 'Accept: application/json' }],
+});
+const rv1 = parse('postman', v1, 'v1.json');
+assert.equal(rv1.ok, true, 'v1 ok');
+const r1 = rv1.mapped.requests.find((r) => r.name === 'Top');
+assert.ok(r1, 'v1 request present');
+assert.equal(r1.data.request.headers[0].key, 'Accept', 'v1 header-string parsed');
+ok('parse(postman v1.0.0) -> flat requests[] + header-string, via WASM');
+
 // 4. unknown format is a soft error, not a throw
 const bad = parse('insomnia', '{}', 'x.json');
 assert.equal(bad.ok, false, 'unknown format -> ok:false');

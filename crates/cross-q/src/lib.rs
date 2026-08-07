@@ -146,7 +146,10 @@ mod tests {
             "cmd.txt",
         );
         assert_eq!(out["ok"], serde_json::json!(true));
-        assert_eq!(out["mapped"]["requests"][0]["data"]["type"], serde_json::json!("http"));
+        assert_eq!(
+            out["mapped"]["requests"][0]["data"]["type"],
+            serde_json::json!("http")
+        );
         // report is embedded and serializable
         assert!(out["report"]["fidelity"].is_string());
     }
