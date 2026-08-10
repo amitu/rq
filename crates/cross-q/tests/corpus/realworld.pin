@@ -1,0 +1,4 @@
+# Pinned commits for the real-world canonical Postman corpus (see fetch-realworld-corpus.sh).
+# Format: <repo> <spdx-license> <sha>
+Adyen/adyen-postman MIT ecb2907c79a0aef2208aa2796a2bd0fc8ffd0cd7
+postmanlabs/newman Apache-2.0 942d1390f81ee4e2cb7d84913b181d5dafe8b2cc

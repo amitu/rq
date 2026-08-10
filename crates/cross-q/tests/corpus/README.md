@@ -1,38 +1,69 @@
-# Postman corpus (pinned fetch, not vendored)
+# Postman corpora (pinned fetch, not vendored)
 
-cross-q's Postman parsers are validated against Postman's **own** cross-version example
-collections from
+cross-q's Postman parsers are validated against **two** corpora with **different jobs**.
+Neither is vendored: provider/demo collections carry secret-shaped placeholder values that
+correctly trip secret scanners, so we commit a pinned SHA + a fetch script and keep the
+downloaded data **gitignored**. Deterministic (pinned), reproducible, no secrets in the repo.
+
+| Corpus | Job | Canonical? | Test |
+|---|---|---|---|
+| **real-world** (Adyen, newman) | **fidelity** — no hollow parse, bounded round-trip loss | ✅ yes | `postman_realworld.rs` |
+| **transformer** (postman-collection-transformer) | **crash-safety / tolerance** — never panic on odd input | ❌ non-canonical dialect | `postman_corpus.rs` |
+
+## 1. Real-world corpus — the fidelity oracle
+
+Collections exported by real API providers in the wild:
+
+- **[`Adyen/adyen-postman`](https://github.com/Adyen/adyen-postman)** (MIT) — 18 canonical
+  singular-key **v2.1** collections (latest per service: Checkout, BalancePlatform,
+  Management, LegalEntity, …). Rich auth, bodies, variables, and saved responses.
+- **[`postmanlabs/newman`](https://github.com/postmanlabs/newman)** (Apache-2.0) — the
+  **v2.0** sample collection + a **v1.0.0** legacy collection, for cross-version coverage.
+
+Pins: `realworld.pin`. Fetch: `fetch-realworld-corpus.sh` → gitignored `./realworld/`.
+`postman_realworld.rs` asserts two things stronger than "it parsed":
+
+1. **No hollow parse** — every request in the source survives into `MappedItems` (equal
+   request counts, source vs re-emitted). This is the guard the transformer corpus could
+   never give: it read *near-empty* and still "passed".
+2. **Bounded round-trip loss** — Postman → IR → Postman drops only keys on a documented
+   allowlist (each with a rationale in the test). Any *new* dropped key fails the test —
+   the "don't silently ignore a field" gate. The key-diff runs only on the v2.1 subset
+   (same dialect in and out); v1/v2.0 fidelity is covered by request-count parity.
+
+## 2. Transformer corpus — crash-safety only
+
 [`postman-collection-transformer`](https://github.com/postmanlabs/postman-collection-transformer)
-(`examples/` — the same collection expressed in v1.0.0 / v2.0.0 / v2.1.0).
+`examples/` (Apache-2.0): the same collection expressed in v1.0.0 / v2.0.0 / v2.1.0.
 
-## Why fetched, not vendored
+**Caveat:** these use a **non-canonical dialect** — plural `headers`/`responses`/`events`
+where canonical v2.1 (per Postman's official JSON Schema) uses singular
+`header`/`response`/`event`. So they're a good **crash-safety / tolerance** oracle (parse
+never panics on odd shapes) but **not** a fidelity oracle — our canonical parsers read them
+near-empty, so a round-trip against them reports dialect noise, not real loss. Fidelity
+lives in the real-world corpus above.
 
-Those demo collections contain **secret-shaped dummy values** (e.g. OAuth consumer
-secrets in `twitter`/`box`) that correctly trip secret scanners. Rather than commit
-third-party secret-shaped data into this repo, we **fetch a pinned snapshot**:
+Pin: `postman-transformer.pin`. Fetch: `fetch-postman-corpus.sh` → gitignored
+`./postman-transformer/`. Test: `postman_corpus.rs`.
 
-- `postman-transformer.pin` — the exact upstream commit SHA (deterministic, reproducible).
-- `fetch-postman-corpus.sh` — downloads that pinned tarball into `./postman-transformer/`
-  (which is **gitignored** — never committed).
-
-This keeps the corpus reproducible (pinned SHA) *and* keeps secret-shaped data out of the
-repo. The daily staleness watcher bumps the pin via PR when upstream changes; the weekly
-watcher opens an issue on a new schema version.
-
-## Running the corpus test
+## Running
 
 ```bash
-crates/cross-q/tests/corpus/fetch-postman-corpus.sh   # one-time, into the gitignored dir
-cargo test -p cross-q --test postman_corpus
+crates/cross-q/tests/corpus/fetch-realworld-corpus.sh   # fidelity corpus (Adyen + newman)
+crates/cross-q/tests/corpus/fetch-postman-corpus.sh     # crash-safety corpus (transformer)
+cargo test -p cross-q --test postman_realworld --test postman_corpus
 ```
 
-`tests/postman_corpus.rs` **fails loud** if the corpus hasn't been fetched (a corpus test
-that silently skipped would be a false green). Run the fetch script once; CI runs it before
-tests.
+Both tests **fail loud** if their corpus hasn't been fetched — a corpus test that silently
+skipped would be a false green. CI runs the fetch scripts before tests. The daily staleness
+watcher bumps the pins via PR; the weekly watcher opens an issue on a new schema version.
 
 ## Attribution & license
 
-Fetched files are © Postman, Inc. and contributors, under the **Apache License 2.0**
-(https://github.com/postmanlabs/postman-collection-transformer/blob/main/LICENSE.md). They
-are third-party test data, fetched at test time — not vendored, not redistributed, not
-relicensed. This repository is MIT.
+Fetched files are third-party test data — fetched at test time, not vendored, not
+redistributed, not relicensed. This repository is MIT.
+
+- Adyen collections © Adyen, **MIT** (https://github.com/Adyen/adyen-postman/blob/main/LICENSE).
+- newman examples © Postman, Inc., **Apache-2.0** (https://github.com/postmanlabs/newman/blob/develop/LICENSE.md).
+- transformer examples © Postman, Inc. and contributors, **Apache-2.0**
+  (https://github.com/postmanlabs/postman-collection-transformer/blob/main/LICENSE.md).
