@@ -109,8 +109,16 @@ fn walk_collection(
                 if let Some(r) = request_item(req, child_parent, report) {
                     requests.push(r);
                     // Saved responses ride alongside as examples, parented to this request.
-                    for (i, ex) in req.examples.iter().enumerate() {
-                        examples.push(example_item(ex, &req.meta.id, i));
+                    if let Protocol::Http(parent_http) = &req.protocol {
+                        for (i, ex) in req.examples.iter().enumerate() {
+                            examples.push(example_item(
+                                ex,
+                                &req.meta.id,
+                                i,
+                                parent_http,
+                                &req.auth,
+                            ));
+                        }
                     }
                 }
             }
@@ -123,15 +131,23 @@ fn walk_collection(
 
 /// A saved response → Requestly `BulkCreateExampleItem`: `{ tempId, parentId (the request),
 /// name, data }` where `data` is the example's request entry plus the mapped `response`.
-fn example_item(ex: &cq_model::Example, parent_request: &str, index: usize) -> Value {
+fn example_item(
+    ex: &cq_model::Example,
+    parent_request: &str,
+    index: usize,
+    parent_http: &HttpRequest,
+    parent_auth: &Option<cq_model::Auth>,
+) -> Value {
     let mut data = serde_json::Map::new();
     data.insert("type".into(), json!("http"));
-    // The example's own request (from Postman's `originalRequest`); fall back to an empty
-    // HTTP request if the source didn't carry one.
-    let default_http = HttpRequest::default();
-    let http = ex.request.as_ref().unwrap_or(&default_http);
+    // The example's request is its saved `originalRequest`; when absent, it inherits the
+    // parent request (url/method/auth) — matching the app's `buildExamples` fallback.
+    let (http, auth) = match &ex.request {
+        Some(h) => (h, &ex.auth),
+        None => (parent_http, parent_auth),
+    };
     data.insert("request".into(), rq_shape::http_request_object(http));
-    if let Some(a) = rq_shape::requestly_auth_value(&ex.auth) {
+    if let Some(a) = rq_shape::requestly_auth_value(auth) {
         data.insert("auth".into(), a);
     }
     if let Some(resp) = ex.response.as_ref().and_then(map_response) {
@@ -141,15 +157,25 @@ fn example_item(ex: &cq_model::Example, parent_request: &str, index: usize) -> V
     let mut item = serde_json::Map::new();
     item.insert("tempId".into(), json!(ex.meta.id));
     item.insert("parentId".into(), json!(parent_request));
-    // Trim trailing dots/spaces (matches the app — a Postman saved-response name is free
-    // text, and a trailing '.' trips the local-FS name sanitizer), falling back when empty.
-    let trimmed = ex.meta.name.trim_end_matches([' ', '\t', '.']);
+    // `resp.name ?? "Example N"`, trailing whitespace/dots trimmed (a trailing '.' trips the
+    // local-FS sanitizer), fall back again if that empties it, then cap the length — matching
+    // the app's `buildExamples`.
+    let fallback = || format!("Example {}", index + 1);
+    let raw = if ex.meta.name.is_empty() {
+        fallback()
+    } else {
+        ex.meta.name.clone()
+    };
+    let trimmed = raw.trim_end_matches(|c: char| c.is_whitespace() || c == '.');
     let name = if trimmed.is_empty() {
-        format!("Example {}", index + 1)
+        fallback()
     } else {
         trimmed.to_string()
     };
-    item.insert("name".into(), json!(name));
+    item.insert(
+        "name".into(),
+        json!(rq_shape::truncate_name(&name, rq_shape::MAX_NAME_LENGTH)),
+    );
     item.insert("data".into(), Value::Object(data));
     Value::Object(item)
 }
@@ -197,11 +223,25 @@ fn request_item(req: &Request, parent_temp: Option<&str>, report: &mut Report) -
     };
 
     let mut data = serde_json::Map::new();
-    data.insert("type".into(), json!("http"));
-    data.insert("request".into(), rq_shape::http_request_object(http));
-    // Requestly convention: a request always carries an auth (unspecified → `inherit`),
-    // applied here in the reverse converter. An unmappable kind is dropped with a
-    // diagnostic rather than defaulted.
+    // A GraphQL body is its own Requestly entry type (`graphql`), not an HTTP body.
+    if let Some(cq_model::Body::Graphql {
+        query,
+        variables,
+        operation_name,
+    }) = &http.body
+    {
+        data.insert("type".into(), json!("graphql"));
+        data.insert(
+            "request".into(),
+            rq_shape::graphql_request_object(http, query, variables, operation_name.as_deref()),
+        );
+    } else {
+        data.insert("type".into(), json!("http"));
+        data.insert("request".into(), rq_shape::http_request_object(http));
+    }
+    // Requestly convention: a request always carries an auth (unspecified → `inherit`).
+    // An auth kind with no Requestly equivalent falls back to `inherit` (matching the app's
+    // `mapAuth` default), recorded as a coercion rather than dropped.
     match &req.auth {
         None => {
             data.insert("auth".into(), json!({ "type": "inherit" }));
@@ -213,11 +253,17 @@ fn request_item(req: &Request, parent_temp: Option<&str>, report: &mut Report) -
             AuthMap::NoAuth => {
                 data.insert("auth".into(), json!({ "type": "no_auth" }));
             }
-            AuthMap::Unsupported(desc) => report.dropped(
-                Phase::Emit,
-                req.meta.source.clone(),
-                format!("auth kind dropped from '{}': {desc}", req.meta.name),
-            ),
+            AuthMap::Unsupported(desc) => {
+                report.coerced(
+                    Phase::Emit,
+                    req.meta.source.clone(),
+                    format!(
+                        "auth kind '{desc}' on '{}' has no Requestly equivalent; → inherit",
+                        req.meta.name
+                    ),
+                );
+                data.insert("auth".into(), json!({ "type": "inherit" }));
+            }
         },
     }
     if let Some(scripts) = rq_shape::scripts_object(&req.scripts) {
@@ -227,7 +273,13 @@ fn request_item(req: &Request, parent_temp: Option<&str>, report: &mut Report) -
     let mut item = serde_json::Map::new();
     item.insert("tempId".into(), json!(req.meta.id));
     item.insert("parentId".into(), parent_ref(parent_temp));
-    item.insert("name".into(), json!(req.meta.name));
+    item.insert(
+        "name".into(),
+        json!(rq_shape::truncate_name(
+            &req.meta.name,
+            rq_shape::MAX_NAME_LENGTH
+        )),
+    );
     if let Some(d) = &req.meta.description {
         item.insert("description".into(), json!(d));
     }

@@ -10,6 +10,25 @@ use cq_model::{Auth, Body, FileRef, FormField, HttpRequest, KeyValue, PathVar, S
 /// The Requestly `LOCAL_FS` schema version these shapes target.
 pub const RQ_SCHEMA_VERSION: &str = "1.12.0";
 
+/// The server's example/name length cap (`MAX_EXAMPLE_NAME_LENGTH`) — a transactional
+/// bulk-create rejects one over-long name for the whole import (RQ-5357).
+pub const MAX_NAME_LENGTH: usize = 255;
+
+/// Truncate a name to `max` **UTF-16 code units** with a trailing `…`, never slicing a
+/// surrogate pair — a byte-exact port of the app's `truncateName` (JS `.length` is UTF-16).
+pub fn truncate_name(name: &str, max: usize) -> String {
+    let units: Vec<u16> = name.encode_utf16().collect();
+    if units.len() <= max {
+        return name.to_string();
+    }
+    let mut cut = max - 1;
+    // If the last kept unit is a lone high surrogate, drop it (no `�`).
+    if cut >= 1 && (0xd800..=0xdbff).contains(&units[cut - 1]) {
+        cut -= 1;
+    }
+    format!("{}…", String::from_utf16_lossy(&units[..cut]))
+}
+
 pub fn schema_url(base: &str) -> String {
     format!("https://assets.requestly.com/local/v{RQ_SCHEMA_VERSION}/{base}.json")
 }
@@ -191,7 +210,9 @@ pub fn requestly_auth_value(auth: &Option<Auth>) -> Option<Value> {
         Some(a) => match auth_to_rq(a) {
             AuthMap::Mapped(v) => Some(v),
             AuthMap::NoAuth => Some(json!({ "type": "no_auth" })),
-            AuthMap::Unsupported(_) => None,
+            // An auth kind with no Requestly equivalent (edgegrid, an unknown type) falls
+            // back to `inherit`, matching the app's `mapAuth` default — never dropped.
+            AuthMap::Unsupported(_) => Some(json!({ "type": "inherit" })),
         },
     }
 }
@@ -227,8 +248,30 @@ pub fn auth_to_rq(auth: &Auth) -> AuthMap {
             "type": "api_key",
             "key": key,
             "value": value,
-            "placement": format!("{placement:?}").to_lowercase(),
+            "placement": match placement {
+                cq_model::ApiKeyPlacement::Query => "query_param",
+                cq_model::ApiKeyPlacement::Header => "header",
+            },
         })),
+        Auth::JwtBearer { algorithm, params } => {
+            let g = |k: &str| params.get(k).cloned().unwrap_or_default();
+            let non_empty = |s: String, dflt: &str| if s.is_empty() { dflt.to_string() } else { s };
+            let add_to = g("addTokenTo");
+            let attachment = if add_to == "queryParam" || add_to == "query" {
+                json!({ "placement": "queryParam", "paramName": non_empty(g("queryParamKey"), "access_token") })
+            } else {
+                json!({ "placement": "header", "headerName": "Authorization", "prefix": non_empty(g("headerPrefix"), "Bearer") })
+            };
+            AuthMap::Mapped(json!({
+                "type": "jwt_bearer",
+                "algorithm": algorithm,
+                "signingKey": g("secret"),
+                "secretBase64Encoded": params.get("isSecretBase64Encoded").map(|v| v == "true").unwrap_or(false),
+                "payload": non_empty(g("payload"), "{}"),
+                "jwtHeader": non_empty(g("header"), "{}"),
+                "attachment": attachment,
+            }))
+        }
         Auth::Digest { params } => {
             let g = |k: &str| params.get(k).cloned().unwrap_or_default();
             AuthMap::Mapped(json!({
@@ -524,6 +567,30 @@ pub fn http_request_object(http: &HttpRequest) -> Value {
         obj.insert("body".into(), body_to_json(body));
     } else {
         obj.insert("body".into(), json!({ "contentType": "none" }));
+    }
+    Value::Object(obj)
+}
+
+/// The Requestly **GraphQL** request object (for an `apiEntry` of `type: "graphql"`):
+/// `{ url, method, headers, queryParams, query, variables?, operationName? }` — no `body`
+/// or `contentType` (those are HTTP-only). Matches the app's graphql `buildRequestEntry` arm.
+pub fn graphql_request_object(
+    http: &HttpRequest,
+    query: &str,
+    variables: &str,
+    operation_name: Option<&str>,
+) -> Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("url".into(), json!(http.url.raw));
+    obj.insert("method".into(), json!(requestly_method(&http.method)));
+    obj.insert("headers".into(), kvs_to_json(&http.headers));
+    obj.insert("queryParams".into(), kvs_to_json(&http.query));
+    obj.insert("query".into(), json!(query));
+    if !variables.is_empty() {
+        obj.insert("variables".into(), json!(variables));
+    }
+    if let Some(op) = operation_name {
+        obj.insert("operationName".into(), json!(op));
     }
     Value::Object(obj)
 }

@@ -222,11 +222,34 @@ pub(super) fn parse_body(v: Option<&Value>, report: &mut Report, locator: &str) 
             ),
         }),
         "formdata" => {
-            let fields =
-                parse_kv_array(body.get("formdata"), report, &format!("{locator}.formdata"));
-            Some(Body::FormData {
-                fields: fields.into_iter().map(FormField::Text).collect(),
-            })
+            // Type-aware: a `type:"file"` entry becomes a file field (the rest are text),
+            // so the form-data `type` survives to the emitter.
+            let mut fields = Vec::new();
+            if let Some(Value::Array(items)) = body.get("formdata") {
+                for (i, it) in items.iter().enumerate() {
+                    let loc = format!("{locator}.formdata[{i}]");
+                    let Some(key) = coerce_key(it.get("key"), report, &loc) else {
+                        continue;
+                    };
+                    let value = coerce_value(it.get("value"));
+                    if it.get("type").and_then(Value::as_str) == Some("file") {
+                        fields.push(FormField::File(cq_model::FileRef::Reference {
+                            id: String::new(),
+                            name: key,
+                            path: value,
+                            size: 0,
+                            source: String::new(),
+                        }));
+                    } else {
+                        let disabled = it.get("disabled").and_then(Value::as_bool).unwrap_or(false);
+                        fields.push(FormField::Text(KeyValue {
+                            enabled: !disabled,
+                            ..KeyValue::new(key, value)
+                        }));
+                    }
+                }
+            }
+            Some(Body::FormData { fields })
         }
         "graphql" => {
             let query = body
@@ -241,10 +264,16 @@ pub(super) fn parse_body(v: Option<&Value>, report: &mut Report, locator: &str) 
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+            let operation_name = body
+                .get("graphql")
+                .and_then(|g| g.get("operationName"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
             Some(Body::Graphql {
                 query,
                 variables,
-                operation_name: None,
+                operation_name,
             })
         }
         "file" => {
@@ -319,6 +348,10 @@ pub(super) fn build_auth(
         "hawk" => Some(Auth::Hawk { params }),
         "awsv4" => Some(Auth::AwsSigV4 { params }),
         "ntlm" => Some(Auth::Ntlm { params }),
+        "jwt" => Some(Auth::JwtBearer {
+            algorithm: get("algorithm"),
+            params,
+        }),
         other => {
             report.coerced(
                 Phase::Map,
@@ -405,12 +438,18 @@ pub(super) fn parse_variables(v: Option<&Value>) -> Vec<Variable> {
     if let Some(Value::Array(items)) = v {
         for it in items {
             if let Some(key) = it.get("key").and_then(Value::as_str) {
+                let data_type = match it.get("type").and_then(Value::as_str) {
+                    Some("boolean") => cq_model::VarType::Boolean,
+                    Some("number") => cq_model::VarType::Number,
+                    Some("secret") => cq_model::VarType::Secret,
+                    _ => cq_model::VarType::String,
+                };
                 out.push(Variable {
                     key: key.to_string(),
                     value: coerce_value(it.get("value")),
                     initial: None,
                     scope: cq_model::Scope::Collection,
-                    data_type: cq_model::VarType::String,
+                    data_type,
                     category: cq_model::VarCategory::Scoped,
                     enabled: !it.get("disabled").and_then(Value::as_bool).unwrap_or(false),
                     rank: None,
@@ -633,8 +672,10 @@ pub(super) fn parse_examples(
     let mut out = Vec::new();
     if let Some(Value::Array(items)) = v {
         for (i, resp) in items.iter().enumerate() {
-            let name = obj_str(resp, "name").unwrap_or_else(|| format!("example {i}"));
-            let id = obj_str(resp, "id").unwrap_or_else(|| format!("pm-ex-{}", slugify(&name)));
+            // Keep the source name verbatim (empty when absent) — the Requestly emitter owns
+            // the `Example N` fallback + trimming + length cap. Id is position-unique.
+            let name = obj_str(resp, "name").unwrap_or_default();
+            let id = obj_str(resp, "id").unwrap_or_else(|| format!("pm-ex-{i}"));
             let loc = format!("{locator}.response[{i}]");
             // The saved response's `originalRequest` (when present) is the request that
             // produced it — parse it so exporters can emit the (request, response) pair.
