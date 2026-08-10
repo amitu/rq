@@ -7,6 +7,7 @@
 
 pub mod bruno;
 pub mod curl;
+pub mod emit_bruno;
 pub mod emit_postman;
 pub mod emit_rq;
 pub mod mappeditems;
@@ -140,6 +141,36 @@ pub fn postman_roundtrip(content: &str) -> Result<serde_json::Value, String> {
     let mut report = Report::new(Fidelity::Lossless);
     let ws = postman::parse_postman(content, &mut report)?;
     Ok(emit_postman::to_postman(&ws))
+}
+
+/// Parse a Bruno single `.bru` request and re-emit it as `.bru` text — the request-level
+/// round-trip used to prove the exporter is lossless (parse → IR → `.bru` → IR recovers the
+/// same IR). Returns the re-emitted `.bru`.
+pub fn bruno_request_roundtrip(content: &str) -> Result<String, String> {
+    let mut report = Report::new(Fidelity::Lossless);
+    let req = bruno::parse_bru_request(content, &mut report)?;
+    let ws = single_request_workspace(req);
+    Ok(emit_bruno::emit_request(
+        match &ws.collections[0].items[0] {
+            Item::Request(r) => r,
+            _ => unreachable!(),
+        },
+    ))
+}
+
+fn single_request_workspace(request: Request) -> Workspace {
+    let root = Collection {
+        meta: RecordMeta::new("bru-root", "", SourceFormat::Bruno),
+        items: vec![Item::Request(Box::new(request))],
+        ..Collection::default()
+    };
+    Workspace {
+        meta: RecordMeta::new("bru-workspace", "", SourceFormat::Bruno),
+        cross_q: ModelHeader::for_source(SourceFormat::Bruno),
+        collections: vec![root],
+        environments: Vec::new(),
+        packages: Vec::new(),
+    }
 }
 
 #[cfg(test)]
