@@ -25,6 +25,7 @@ cq-report = { path = "../cq-report" }
 
 [dev-dependencies]
 tempfile.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
