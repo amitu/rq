@@ -100,6 +100,47 @@ mod tests {
     }
 
     #[test]
+    fn v2_1_tolerates_plural_key_spellings() {
+        // Some Postman-published collections spell header/response/event as plural
+        // (headers/responses/events) with the same value shape. We must recover that data,
+        // not silently read the collection empty.
+        let json = format!(
+            r#"{{
+              "info": {{ "name": "Plural", "schema": "{V21_SCHEMA}" }},
+              "item": [
+                {{ "name": "get",
+                  "request": {{
+                    "method": "GET",
+                    "url": "https://x.test/u",
+                    "headers": [{{ "key": "Accept", "value": "application/json" }}]
+                  }},
+                  "events": [
+                    {{ "listen": "prerequest", "script": {{ "exec": ["pm.environment.set('t', 1);"] }} }}
+                  ],
+                  "responses": [
+                    {{ "name": "200", "code": 200, "status": "OK", "body": "{{}}" }}
+                  ]
+                }}
+              ]
+            }}"#
+        );
+        let (ws, _) = parse(&json);
+        let Item::Request(req) = &ws.collections[0].items[0] else {
+            panic!("expected request")
+        };
+        let Protocol::Http(http) = &req.protocol else {
+            panic!()
+        };
+        // plural `headers` recovered (not hollow)
+        assert_eq!(http.headers.len(), 1);
+        assert_eq!(http.headers[0].key, "Accept");
+        // plural `events` → pre-request script
+        assert!(req.scripts.pre_request.is_some(), "plural events not read");
+        // plural `responses` → saved example
+        assert_eq!(req.examples.len(), 1, "plural responses not read");
+    }
+
+    #[test]
     fn v2_folders_become_nested_collections() {
         let json = format!(
             r#"{{ "info": {{ "name": "W", "schema": "{V21_SCHEMA}" }},

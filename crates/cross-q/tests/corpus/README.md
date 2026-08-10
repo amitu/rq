@@ -11,7 +11,7 @@ the fetch scripts before tests.
 | Corpus | Format | Job | Canonical? | Test |
 |---|---|---|---|---|
 | **real-world** (Adyen, newman) | Postman | **fidelity** — no hollow parse, bounded round-trip loss | ✅ yes | `postman_realworld.rs` |
-| **transformer** (postman-collection-transformer) | Postman | **crash-safety / tolerance** — never panic on odd input | ❌ non-canonical dialect | `postman_corpus.rs` |
+| **transformer** (postman-collection-transformer) | Postman | **crash-safety + tolerance** — parses odd/plural shapes without loss | mixed (incl. plural-shape fixtures — now tolerated) | `postman_corpus.rs` |
 | **bruno-testbench** (usebruno/bruno) | Bruno | **fidelity** — no hollow parse over a real directory tree | ✅ yes | `bruno_corpus.rs` |
 
 ## 1. Real-world corpus — the fidelity oracle
@@ -40,12 +40,16 @@ Pins: `realworld.pin`. Fetch: `fetch-realworld-corpus.sh` → gitignored `./real
 [`postman-collection-transformer`](https://github.com/postmanlabs/postman-collection-transformer)
 `examples/` (Apache-2.0): the same collection expressed in v1.0.0 / v2.0.0 / v2.1.0.
 
-**Caveat:** these use a **non-canonical dialect** — plural `headers`/`responses`/`events`
-where canonical v2.1 (per Postman's official JSON Schema) uses singular
-`header`/`response`/`event`. So they're a good **crash-safety / tolerance** oracle (parse
-never panics on odd shapes) but **not** a fidelity oracle — our canonical parsers read them
-near-empty, so a round-trip against them reports dialect noise, not real loss. Fidelity
-lives in the real-world corpus above.
+**Note:** these are the transformer *library's* test fixtures, not Postman **app** exports,
+and they're a **mix**: most are canonical singular `header`/`response`/`event`, but several
+(e.g. `box`, `github`, `twitter`, `proper-url-parsing`, `rawjsonbody` — ~5 of the 13 v2.1
+files) use a **plural** shape (`headers`/`responses`/`events`). Since Postman published these,
+the parser now **tolerates plural** as an alias for the singular keys (identical value shape),
+so nothing is silently dropped — e.g. `box.json` recovers 92 requests / 91 headers that were
+previously read empty. This corpus is still not a *round-trip fidelity* oracle for the plural
+files (we emit canonical singular, so a byte key-diff shows `headers`→`header` as a
+difference — correct normalization, not loss); corpus-wide fidelity lives in the real-world
+corpus above.
 
 Pin: `postman-transformer.pin`. Fetch: `fetch-postman-corpus.sh` → gitignored
 `./postman-transformer/`. Test: `postman_corpus.rs`.

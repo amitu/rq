@@ -28,6 +28,15 @@ pub(super) fn obj_str(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(str::to_string)
 }
 
+/// Read a v2 field by its canonical singular name, falling back to the plural spelling that
+/// some Postman-published collections use (`headers`/`responses`/`events`). The value shape
+/// is identical — only the key name differs — so tolerating it recovers data that would
+/// otherwise be silently dropped (see `tests/corpus/README.md`). Detection stays strict;
+/// structure is read liberally.
+pub(super) fn field<'a>(v: &'a Value, singular: &str, plural: &str) -> Option<&'a Value> {
+    v.get(singular).or_else(|| v.get(plural))
+}
+
 /// Coerce a key-value *key* into a string (RQ-3458). `None` (with a `Dropped` diagnostic)
 /// only for genuinely ambiguous keys (object/array).
 pub(super) fn coerce_key(v: Option<&Value>, report: &mut Report, locator: &str) -> Option<String> {
@@ -445,7 +454,7 @@ pub(super) fn parse_v2_tree(root: &Value, report: &mut Report, auth_fn: AuthFn) 
         ),
         auth: auth_fn(root.get("auth"), report, "auth"),
         headers: Vec::new(),
-        scripts: parse_scripts(root.get("event")),
+        scripts: parse_scripts(field(root, "event", "events")),
         variables: parse_variables(root.get("variable")),
         items,
     };
@@ -487,7 +496,7 @@ fn parse_v2_item(item: &Value, report: &mut Report, locator: &str, auth_fn: Auth
             meta: record_meta(id, name, locator, None),
             auth: auth_fn(item.get("auth"), report, &format!("{locator}.auth")),
             headers: Vec::new(),
-            scripts: parse_scripts(item.get("event")),
+            scripts: parse_scripts(field(item, "event", "events")),
             variables: Vec::new(),
             items: parse_v2_items(item.get("item"), report, locator, auth_fn),
         }))
@@ -517,7 +526,11 @@ fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: A
                 .unwrap_or(Method::Get);
             let (url, query) = parse_url(r.get("url"), report, &format!("{locator}.url"));
             let path_variables = parse_path_vars(r.get("url"));
-            let headers = parse_kv_array(r.get("header"), report, &format!("{locator}.header"));
+            let headers = parse_kv_array(
+                field(r, "header", "headers"),
+                report,
+                &format!("{locator}.header"),
+            );
             let body = parse_body(r.get("body"), report, &format!("{locator}.body"));
             let auth = auth_fn(r.get("auth"), report, &format!("{locator}.auth"));
             (method, url, query, path_variables, headers, body, auth)
@@ -560,11 +573,11 @@ fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: A
         locator,
         http,
         auth,
-        parse_scripts(item.get("event")),
+        parse_scripts(field(item, "event", "events")),
     );
     // Saved responses (`response[]`) → examples, stored verbatim so the round-trip is
     // lossless (incl. Postman-internal fields like `_postman_previewlanguage`).
-    request.examples = parse_examples(item.get("response"), locator);
+    request.examples = parse_examples(field(item, "response", "responses"), locator);
     request
 }
 

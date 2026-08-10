@@ -7,12 +7,13 @@
 //! We emit v2.1, so the fair round-trip is the v2.1 corpus. Fails loud if the corpus isn't
 //! fetched. For now this REPORTS the loss set (a triage aid).
 //!
-//! CAVEAT: the transformer `examples/` use a *non-canonical* v2.1 dialect (plural
-//! `headers`/`responses`/`events`), so much of the reported "loss" here is dialect noise,
-//! not real data loss. The authoritative fidelity proof is the canonical-keys round-trip
-//! unit test in `src/emit_postman.rs`; the corpus-wide fidelity gate belongs against a
-//! *canonical* corpus (the app's own fixtures / a real-world harvest — see the integration
-//! plan), not this dialect.
+//! CAVEAT: several of the transformer `examples/` (e.g. box/github/twitter — ~5 of the 13
+//! v2.1 files) use a *plural* shape (`headers`/`responses`/`events`). The parser tolerates
+//! plural (so the data is recovered, not dropped), but we *emit* canonical singular — so a
+//! byte key-diff here shows `headers`→`header` as a "difference" that is correct
+//! normalization, not real loss. The authoritative fidelity proof is the canonical-keys
+//! round-trip unit test in `src/emit_postman.rs` and the real-world corpus gate
+//! (`postman_realworld.rs`), not this mixed set.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
