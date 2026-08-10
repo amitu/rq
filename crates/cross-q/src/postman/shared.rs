@@ -575,7 +575,7 @@ fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: A
     let id = obj_str(item, "id")
         .or_else(|| obj_str(item, "_postman_id"))
         .unwrap_or_else(|| format!("pm-{}", slugify(locator)));
-    let desc = item.get("request").and_then(|r| description(r));
+    let desc = item.get("request").and_then(description);
 
     let mut request = http_request(
         NodeMeta {
