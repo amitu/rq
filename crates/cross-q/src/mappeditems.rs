@@ -88,7 +88,13 @@ fn walk_collection(
         let mut item = serde_json::Map::new();
         item.insert("tempId".into(), json!(temp));
         item.insert("parentId".into(), parent_ref(parent_temp));
-        item.insert("name".into(), json!(coll.meta.name));
+        item.insert(
+            "name".into(),
+            json!(rq_shape::truncate_name(
+                &coll.meta.name,
+                rq_shape::MAX_NAME_LENGTH
+            )),
+        );
         if let Some(d) = &coll.meta.description {
             item.insert("description".into(), json!(d));
         }

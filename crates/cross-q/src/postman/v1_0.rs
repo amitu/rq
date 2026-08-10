@@ -186,7 +186,9 @@ fn build_v1_folder<'a>(
     }
 
     Collection {
-        meta: shared::record_meta(fid, fname, floc, shared::description(folder)),
+        // v1 folder description is a plain string kept verbatim (incl. "" — the app keeps an
+        // empty string too, unlike the v2 object-form which drops empty).
+        meta: shared::record_meta(fid, fname, floc, shared::obj_str(folder, "description")),
         // v1 folders carry a v2.1-style `auth` object when set.
         auth: super::v2_1::parse_auth(folder.get("auth"), report, &format!("{floc}.auth")),
         headers: Vec::new(),
