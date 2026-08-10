@@ -207,6 +207,10 @@ pub struct Request {
     /// Declared chaining (the superset of Requestly `run_order` and rq's `parents:`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<Dependency>,
+    /// Request-scoped variable operations and response assertions that several tools express
+    /// as first-class blocks (Bruno `vars:*`/`assert`, Hurl `[Captures]`/`[Asserts]`).
+    #[serde(default, skip_serializing_if = "RequestBehavior::is_empty")]
+    pub behavior: RequestBehavior,
 }
 
 /// The protocol-specific payload of a request. Internally tagged on `type`.
@@ -705,6 +709,44 @@ pub struct VarBinding {
     pub to: String,
 }
 
+/// Request-scoped behaviors that several API clients express as first-class blocks, distinct
+/// from free-form scripts: variables set before a request or captured from its response, and
+/// assertions checked against the response. Sources that fold these into scripts (Postman)
+/// leave this empty; sources that make them first-class (Bruno `vars:*`/`assert`, Hurl
+/// `[Captures]`/`[Asserts]`) populate it, so the distinction round-trips.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestBehavior {
+    /// Variables set before the request runs (Bruno `vars:pre-request`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_request_vars: Vec<Variable>,
+    /// Variables captured from the response (Bruno `vars:post-response`, Hurl `[Captures]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub post_response_vars: Vec<Variable>,
+    /// Response assertions (Bruno `assert`, Hurl `[Asserts]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asserts: Vec<Assertion>,
+}
+
+impl RequestBehavior {
+    pub fn is_empty(&self) -> bool {
+        self.pre_request_vars.is_empty()
+            && self.post_response_vars.is_empty()
+            && self.asserts.is_empty()
+    }
+}
+
+/// A response assertion: an expression and the predicate it must satisfy, both kept as
+/// strings so any assertion DSL round-trips verbatim (Bruno writes `res.status: eq 200`,
+/// i.e. `expr = "res.status"`, `predicate = "eq 200"`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Assertion {
+    pub expr: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub predicate: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,6 +785,7 @@ mod tests {
                     to: "token".into(),
                 }],
             }],
+            behavior: RequestBehavior::default(),
         }
     }
 
@@ -861,6 +904,7 @@ mod tests {
             scripts: Scripts::default(),
             examples: Vec::new(),
             depends_on: Vec::new(),
+            behavior: RequestBehavior::default(),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(!json.contains("\"headers\""), "empty headers omitted");

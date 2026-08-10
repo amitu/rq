@@ -414,6 +414,7 @@ pub(super) fn http_request(
         scripts,
         examples: Vec::new(),
         depends_on: Vec::new(),
+        behavior: Default::default(),
     }
 }
 

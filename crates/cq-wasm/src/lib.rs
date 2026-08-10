@@ -40,5 +40,5 @@ pub fn version() -> String {
 #[wasm_bindgen]
 pub fn formats() -> String {
     // Keep in sync with `cross_q::build_workspace`'s match arms.
-    "[\"curl\",\"postman\"]".to_string()
+    "[\"curl\",\"postman\",\"bruno\"]".to_string()
 }

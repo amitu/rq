@@ -241,6 +241,7 @@ mod tests {
             scripts: Default::default(),
             examples: vec![],
             depends_on: vec![],
+            behavior: Default::default(),
         };
         Workspace {
             meta: RecordMeta::new("ws", "", SourceFormat::Curl),

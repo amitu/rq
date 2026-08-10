@@ -209,6 +209,7 @@ mod tests {
             scripts: Default::default(),
             examples: vec![],
             depends_on: vec![],
+            behavior: Default::default(),
         }
     }
 

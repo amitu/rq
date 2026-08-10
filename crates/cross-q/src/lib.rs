@@ -5,6 +5,7 @@
 //! everything that wasn't a clean 1:1. More importers and exporters slot into the same
 //! parse → map → emit shape.
 
+pub mod bruno;
 pub mod curl;
 pub mod emit_postman;
 pub mod emit_rq;
@@ -53,6 +54,7 @@ pub fn curl_to_workspace(input: &str, report: &mut Report) -> Result<Workspace, 
         scripts: Default::default(),
         examples: Vec::new(),
         depends_on: Vec::new(),
+        behavior: Default::default(),
     };
     // An unnamed root collection => the request lands directly under apis/.
     let root = Collection {
@@ -95,8 +97,11 @@ pub fn build_workspace(
     match source {
         "curl" => curl_to_workspace(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         "postman" => postman::parse_postman(input, report).map_err(|e| anyhow::anyhow!("{e}")),
+        "bruno" => bruno::parse_bruno(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         other => {
-            anyhow::bail!("not_implemented: source format {other:?} (supported: curl, postman)")
+            anyhow::bail!(
+                "not_implemented: source format {other:?} (supported: curl, postman, bruno)"
+            )
         }
     }
 }

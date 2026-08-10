@@ -33,7 +33,7 @@ holistic (all of a version's features in one go), not feature-by-feature.
 | **Requestly** | `LOCAL_FS` 1.12.0 | 🔜 | ✅ | the git-native on-disk tree |
 | **Requestly** | `MappedItems` (bulk-create) | — | ✅ | the app's in-memory import contract |
 | **Requestly** | export envelope 1.1.0 | 🔜 | 🔜 | single-file export |
-| **Bruno** | `.bru` | 🔜 | 🔜 | text DSL — next up |
+| **Bruno** | `.bru` v2 | 🏗️ | 🔜 | text DSL — request-level import done; folder-tree ingestion next |
 | **Insomnia** | v4 / v5 | 🔜 | 🔜 | |
 | **OpenAPI** | 3.0 / 3.1, Swagger 2.0 | 🔜 | 🔜 | |
 | **HAR** | 1.2 | 🔜 | — | capture → requests |

@@ -13,7 +13,7 @@ const ok = (name) => {
 
 // 1. formats + version resolve through the WASM boundary
 const formats = supportedFormats();
-assert.ok(Array.isArray(formats) && formats.includes('postman') && formats.includes('curl'), 'formats');
+assert.ok(Array.isArray(formats) && formats.includes('postman') && formats.includes('curl') && formats.includes('bruno'), 'formats');
 ok(`supportedFormats() -> ${JSON.stringify(formats)}`);
 assert.ok(typeof version() === 'string' && version().length > 0, 'version');
 ok(`version() -> ${version()}`);
@@ -70,6 +70,26 @@ const r1 = rv1.mapped.requests.find((r) => r.name === 'Top');
 assert.ok(r1, 'v1 request present');
 assert.equal(r1.data.request.headers[0].key, 'Accept', 'v1 header-string parsed');
 ok('parse(postman v1.0.0) -> flat requests[] + header-string, via WASM');
+
+// 3c. Bruno .bru (v2) — proves the text-DSL importer runs through WASM
+const bru = `meta {
+  name: Get user
+  type: http
+}
+get {
+  url: {{base}}/users/:id
+  auth: bearer
+}
+auth:bearer {
+  token: {{token}}
+}
+`;
+const rbru = parse('bruno', bru, 'get-user.bru');
+assert.equal(rbru.ok, true, 'bruno ok');
+const bruReq = rbru.mapped.requests.find((r) => r.name === 'Get user');
+assert.ok(bruReq, 'bruno request present');
+assert.equal(bruReq.data.auth.type, 'bearer_token', 'bruno bearer auth mapped');
+ok('parse(bruno .bru) -> request with bearer auth, via WASM');
 
 // 4. unknown format is a soft error, not a throw
 const bad = parse('insomnia', '{}', 'x.json');
