@@ -19,10 +19,18 @@ use crate::rq_shape::{self, AuthMap};
 pub fn to_mapped_items(ws: &Workspace, report: &mut Report) -> Value {
     let mut collections = Vec::new();
     let mut requests = Vec::new();
+    let mut examples = Vec::new();
     let mut environments = Vec::new();
 
     for coll in &ws.collections {
-        walk_collection(coll, None, &mut collections, &mut requests, report);
+        walk_collection(
+            coll,
+            None,
+            &mut collections,
+            &mut requests,
+            &mut examples,
+            report,
+        );
     }
     for env in &ws.environments {
         environments.push(environment_item(env));
@@ -36,6 +44,9 @@ pub fn to_mapped_items(ws: &Workspace, report: &mut Report) -> Value {
     if !requests.is_empty() {
         obj.insert("requests".into(), Value::Array(requests));
     }
+    if !examples.is_empty() {
+        obj.insert("examples".into(), Value::Array(examples));
+    }
     if !environments.is_empty() {
         obj.insert("environments".into(), Value::Array(environments));
     }
@@ -45,11 +56,13 @@ pub fn to_mapped_items(ws: &Workspace, report: &mut Report) -> Value {
 /// Walk a collection, appending its records to the per-kind bundles. A collection with an
 /// empty name is the synthetic root — it produces no record, and its items inherit the
 /// incoming parent (root → `parentId: null`).
+#[allow(clippy::too_many_arguments)]
 fn walk_collection(
     coll: &Collection,
     parent_temp: Option<&str>,
     collections: &mut Vec<Value>,
     requests: &mut Vec<Value>,
+    examples: &mut Vec<Value>,
     report: &mut Report,
 ) {
     let this_temp: Option<String> = if coll.meta.name.is_empty() {
@@ -95,13 +108,76 @@ fn walk_collection(
             Item::Request(req) => {
                 if let Some(r) = request_item(req, child_parent, report) {
                     requests.push(r);
+                    // Saved responses ride alongside as examples, parented to this request.
+                    for (i, ex) in req.examples.iter().enumerate() {
+                        examples.push(example_item(ex, &req.meta.id, i));
+                    }
                 }
             }
             Item::Collection(child) => {
-                walk_collection(child, child_parent, collections, requests, report)
+                walk_collection(child, child_parent, collections, requests, examples, report)
             }
         }
     }
+}
+
+/// A saved response → Requestly `BulkCreateExampleItem`: `{ tempId, parentId (the request),
+/// name, data }` where `data` is the example's request entry plus the mapped `response`.
+fn example_item(ex: &cq_model::Example, parent_request: &str, index: usize) -> Value {
+    let mut data = serde_json::Map::new();
+    data.insert("type".into(), json!("http"));
+    // The example's own request (from Postman's `originalRequest`); fall back to an empty
+    // HTTP request if the source didn't carry one.
+    let default_http = HttpRequest::default();
+    let http = ex.request.as_ref().unwrap_or(&default_http);
+    data.insert("request".into(), rq_shape::http_request_object(http));
+    if let Some(a) = rq_shape::requestly_auth_value(&ex.auth) {
+        data.insert("auth".into(), a);
+    }
+    if let Some(resp) = ex.response.as_ref().and_then(map_response) {
+        data.insert("response".into(), resp);
+    }
+
+    let mut item = serde_json::Map::new();
+    item.insert("tempId".into(), json!(ex.meta.id));
+    item.insert("parentId".into(), json!(parent_request));
+    // Trim trailing dots/spaces (matches the app — a Postman saved-response name is free
+    // text, and a trailing '.' trips the local-FS name sanitizer), falling back when empty.
+    let trimmed = ex.meta.name.trim_end_matches([' ', '\t', '.']);
+    let name = if trimmed.is_empty() {
+        format!("Example {}", index + 1)
+    } else {
+        trimmed.to_string()
+    };
+    item.insert("name".into(), json!(name));
+    item.insert("data".into(), Value::Object(data));
+    Value::Object(item)
+}
+
+/// Map a Postman saved-response object → Requestly `HttpResponse`
+/// (`{ body, headers, status, statusText, time }`), or `None` for a response-less example
+/// (no body and no headers — ADR-073), matching the app's `mapPostmanResponse`.
+fn map_response(resp: &Value) -> Option<Value> {
+    let mut headers = serde_json::Map::new();
+    if let Some(Value::Array(hs)) = resp.get("header") {
+        for h in hs {
+            if let Some(k) = h.get("key").and_then(Value::as_str) {
+                let val = h.get("value").and_then(Value::as_str).unwrap_or("");
+                headers.insert(k.to_string(), json!(val));
+            }
+        }
+    }
+    let body = resp.get("body").and_then(Value::as_str);
+    if body.is_none() && headers.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "body": body.unwrap_or(""),
+        "headers": Value::Object(headers),
+        "status": resp.get("code").and_then(Value::as_u64).unwrap_or(0),
+        "statusText": resp.get("status").and_then(Value::as_str).unwrap_or(""),
+        "time": 0,
+    }))
 }
 
 fn request_item(req: &Request, parent_temp: Option<&str>, report: &mut Report) -> Option<Value> {

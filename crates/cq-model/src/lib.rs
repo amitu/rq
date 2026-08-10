@@ -688,10 +688,18 @@ pub enum ScriptDialect {
     Raw,
 }
 
-/// A saved response / example attached to a request.
+/// A saved response / example attached to a request — conceptually a captured (request,
+/// response) pair. `response` keeps the source's response object verbatim (lossless
+/// round-trip); `request`/`auth` are the example's own request (Postman's
+/// `response.originalRequest`), parsed so exporters that model an example as a request +
+/// response can emit it without re-parsing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Example {
     pub meta: RecordMeta,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<HttpRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<Auth>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<Json>,
 }

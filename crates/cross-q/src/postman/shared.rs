@@ -28,6 +28,20 @@ pub(super) fn obj_str(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(str::to_string)
 }
 
+/// Read a Postman `description`, which may be a plain string OR the object form
+/// `{ content, type }` (the app flattens the latter to its `content`). Empty → `None`.
+pub(super) fn description(v: &Value) -> Option<String> {
+    match v.get("description") {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::Object(o)) => o
+            .get("content")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
 /// Read a v2 field by its canonical singular name, falling back to the plural spelling that
 /// some Postman-published collections use (`headers`/`responses`/`events`). The value shape
 /// is identical — only the key name differs — so tolerating it recovers data that would
@@ -450,7 +464,7 @@ pub(super) fn parse_v2_tree(root: &Value, report: &mut Report, auth_fn: AuthFn) 
                 .unwrap_or_else(|| format!("pm-{}", slugify(&info_name))),
             info_name.clone(),
             "info",
-            root.get("info").and_then(|i| obj_str(i, "description")),
+            root.get("info").map(description).unwrap_or(None),
         ),
         auth: auth_fn(root.get("auth"), report, "auth"),
         headers: Vec::new(),
@@ -491,9 +505,9 @@ fn parse_v2_items(
 fn parse_v2_item(item: &Value, report: &mut Report, locator: &str, auth_fn: AuthFn) -> Item {
     if item.get("item").is_some() {
         let name = obj_str(item, "name").unwrap_or_else(|| "folder".to_string());
-        let id = obj_str(item, "id").unwrap_or_else(|| format!("pm-{}", slugify(&name)));
+        let id = obj_str(item, "id").unwrap_or_else(|| format!("pm-{}", slugify(locator)));
         Item::Collection(Box::new(Collection {
-            meta: record_meta(id, name, locator, obj_str(item, "description")),
+            meta: record_meta(id, name, locator, description(item)),
             auth: auth_fn(item.get("auth"), report, &format!("{locator}.auth")),
             headers: Vec::new(),
             scripts: parse_scripts(field(item, "event", "events")),
@@ -505,17 +519,21 @@ fn parse_v2_item(item: &Value, report: &mut Report, locator: &str, auth_fn: Auth
     }
 }
 
-fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: AuthFn) -> Request {
-    let name = obj_str(item, "name").unwrap_or_else(|| "request".to_string());
-    let req = item.get("request");
-    let (method, url, query, path_variables, headers, body, auth) = match req {
+/// Parse a Postman **request object** (the value of `item.request`, or a saved response's
+/// `originalRequest`) into an [`HttpRequest`] + its [`Auth`]. Shared by the request mapper
+/// and the example mapper.
+pub(super) fn parse_request_obj(
+    req: Option<&Value>,
+    report: &mut Report,
+    locator: &str,
+    auth_fn: AuthFn,
+) -> (HttpRequest, Option<Auth>) {
+    match req {
         Some(Value::String(s)) => (
-            Method::Get,
-            Url::raw(s),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            None,
+            HttpRequest {
+                url: Url::raw(s),
+                ..HttpRequest::default()
+            },
             None,
         ),
         Some(r @ Value::Object(_)) => {
@@ -533,42 +551,37 @@ fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: A
             );
             let body = parse_body(r.get("body"), report, &format!("{locator}.body"));
             let auth = auth_fn(r.get("auth"), report, &format!("{locator}.auth"));
-            (method, url, query, path_variables, headers, body, auth)
+            (
+                HttpRequest {
+                    method,
+                    url,
+                    headers,
+                    query,
+                    path_variables,
+                    body,
+                    settings: cq_model::RequestSettings::default(),
+                },
+                auth,
+            )
         }
-        _ => (
-            Method::Get,
-            Url::default(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-        ),
-    };
+        _ => (HttpRequest::default(), None),
+    }
+}
+
+fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: AuthFn) -> Request {
+    let name = obj_str(item, "name").unwrap_or_else(|| "request".to_string());
+    let (http, auth) = parse_request_obj(item.get("request"), report, locator, auth_fn);
 
     let id = obj_str(item, "id")
         .or_else(|| obj_str(item, "_postman_id"))
-        .unwrap_or_else(|| format!("pm-{}", slugify(&name)));
-    let description = item
-        .get("request")
-        .and_then(|r| r.get("description"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
+        .unwrap_or_else(|| format!("pm-{}", slugify(locator)));
+    let desc = item.get("request").and_then(|r| description(r));
 
-    let http = HttpRequest {
-        method,
-        url,
-        headers,
-        query,
-        path_variables,
-        body,
-        settings: cq_model::RequestSettings::default(),
-    };
     let mut request = http_request(
         NodeMeta {
             id,
             name,
-            description,
+            description: desc,
         },
         locator,
         http,
@@ -577,21 +590,44 @@ fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: A
     );
     // Saved responses (`response[]`) → examples, stored verbatim so the round-trip is
     // lossless (incl. Postman-internal fields like `_postman_previewlanguage`).
-    request.examples = parse_examples(field(item, "response", "responses"), locator);
+    request.examples = parse_examples(
+        field(item, "response", "responses"),
+        report,
+        locator,
+        auth_fn,
+    );
     request
 }
 
 /// Postman saved responses (`response[]`) → examples. The full response object is kept
-/// verbatim in [`Example::response`] — lossless, and complex enough (originalRequest,
-/// headers, cookies, code/status/time) that verbatim capture beats partial modelling.
-pub(super) fn parse_examples(v: Option<&Value>, locator: &str) -> Vec<Example> {
+/// verbatim in [`Example::response`] (lossless round-trip); the response's `originalRequest`
+/// is *also* parsed into [`Example::request`] so exporters that model an example as a
+/// (request, response) pair (e.g. Requestly) can emit it without re-parsing.
+pub(super) fn parse_examples(
+    v: Option<&Value>,
+    report: &mut Report,
+    locator: &str,
+    auth_fn: AuthFn,
+) -> Vec<Example> {
     let mut out = Vec::new();
     if let Some(Value::Array(items)) = v {
         for (i, resp) in items.iter().enumerate() {
             let name = obj_str(resp, "name").unwrap_or_else(|| format!("example {i}"));
             let id = obj_str(resp, "id").unwrap_or_else(|| format!("pm-ex-{}", slugify(&name)));
+            let loc = format!("{locator}.response[{i}]");
+            // The saved response's `originalRequest` (when present) is the request that
+            // produced it — parse it so exporters can emit the (request, response) pair.
+            let (request, auth) = match resp.get("originalRequest") {
+                Some(orig) => {
+                    let (http, auth) = parse_request_obj(Some(orig), report, &loc, auth_fn);
+                    (Some(http), auth)
+                }
+                None => (None, None),
+            };
             out.push(Example {
-                meta: record_meta(id, name, &format!("{locator}.response[{i}]"), None),
+                meta: record_meta(id, name, &loc, None),
+                request,
+                auth,
                 response: Some(resp.clone()),
             });
         }
