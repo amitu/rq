@@ -169,7 +169,9 @@ fn v1_request(req: &Value, report: &mut Report, locator: &str) -> Request {
         .and_then(Value::as_str)
         .map(|m| Method::from(m.to_string()))
         .unwrap_or(Method::Get);
-    let url = Url::raw(shared::obj_str(req, "url").unwrap_or_default());
+    let raw_url = shared::obj_str(req, "url").unwrap_or_default();
+    let query = shared::query_from_raw(&raw_url);
+    let url = Url::raw(raw_url);
     let headers = req
         .get("headers")
         .and_then(Value::as_str)
@@ -195,7 +197,7 @@ fn v1_request(req: &Value, report: &mut Report, locator: &str) -> Request {
         method,
         url,
         headers,
-        query: Vec::new(),
+        query,
         path_variables: Vec::new(),
         body,
         settings: cq_model::RequestSettings::default(),

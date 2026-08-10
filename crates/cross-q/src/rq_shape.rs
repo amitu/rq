@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 
-use cq_model::{Auth, Body, HttpRequest, KeyValue, PathVar, Scripts, Variable};
+use cq_model::{Auth, Body, FileRef, FormField, HttpRequest, KeyValue, PathVar, Scripts, Variable};
 
 /// The Requestly `LOCAL_FS` schema version these shapes target.
 pub const RQ_SCHEMA_VERSION: &str = "1.12.0";
@@ -44,9 +44,9 @@ pub fn body_to_json(body: &Body) -> Value {
             "contentType": "form",
             "formUrlEncoded": kvs_to_json(fields),
         }),
-        Body::FormData { .. } => json!({
+        Body::FormData { fields } => json!({
             "contentType": "multipart/form-data",
-            "formData": [],
+            "formData": form_data_to_json(fields),
         }),
         Body::Binary { .. } => json!({ "contentType": "binary" }),
         Body::Graphql {
@@ -57,6 +57,39 @@ pub fn body_to_json(body: &Body) -> Value {
             "graphqlVariables": variables,
         }),
     }
+}
+
+/// Requestly multipart `formData[]` — `{ id, key, value, isEnabled, type }` (`type` is
+/// `"text"` or `"file"`), matching the app's form-data mapping.
+fn form_data_to_json(fields: &[FormField]) -> Value {
+    Value::Array(
+        fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| match f {
+                FormField::Text(kv) => json!({
+                    "id": i as u64,
+                    "key": kv.key,
+                    "value": kv.value,
+                    "isEnabled": kv.enabled,
+                    "type": "text",
+                }),
+                FormField::File(file) => {
+                    let (name, path) = match file {
+                        FileRef::Reference { name, path, .. } => (name.as_str(), path.as_str()),
+                        FileRef::Content { name, .. } => (name.as_str(), ""),
+                    };
+                    json!({
+                        "id": i as u64,
+                        "key": name,
+                        "value": path,
+                        "isEnabled": true,
+                        "type": "file",
+                    })
+                }
+            })
+            .collect(),
+    )
 }
 
 /// Requestly `keyValuePairSchema[]` — `{ id (number), key, value, isEnabled }`.

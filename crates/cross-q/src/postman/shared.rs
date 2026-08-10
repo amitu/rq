@@ -165,15 +165,36 @@ pub(super) fn parse_url(
     locator: &str,
 ) -> (Url, Vec<KeyValue>) {
     match v {
-        Some(Value::String(s)) => (Url::raw(s), Vec::new()),
+        Some(Value::String(s)) => (Url::raw(s), query_from_raw(s)),
         Some(Value::Object(_)) => {
             let raw = obj_str(v.unwrap(), "raw").unwrap_or_default();
-            let query =
+            let mut query =
                 parse_kv_array(v.unwrap().get("query"), report, &format!("{locator}.query"));
+            // No structured `query[]` (some collections only carry the query in `raw`) —
+            // recover it from the raw string, matching the app's URL parse.
+            if query.is_empty() {
+                query = query_from_raw(&raw);
+            }
             (Url::raw(raw), query)
         }
         _ => (Url::default(), Vec::new()),
     }
+}
+
+/// Extract query parameters from a raw URL string: everything after the first `?`, split on
+/// `&`, each `key=value` (value optional). Matches the app, which does NOT split off a `#`
+/// fragment — a trailing `#…` stays part of the last value. Templates (`{{var}}`) pass through.
+pub(super) fn query_from_raw(raw: &str) -> Vec<KeyValue> {
+    let Some((_, qs)) = raw.split_once('?') else {
+        return Vec::new();
+    };
+    qs.split('&')
+        .filter(|p| !p.is_empty())
+        .map(|pair| match pair.split_once('=') {
+            Some((k, val)) => KeyValue::new(k, val),
+            None => KeyValue::new(pair, ""),
+        })
+        .collect()
 }
 
 /// Parse a v2 `body` object (mode-tagged).
