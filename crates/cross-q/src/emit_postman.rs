@@ -59,6 +59,9 @@ fn emit_folder(folder: &Collection) -> Value {
     let mut m = Map::new();
     m.insert("id".into(), json!(folder.meta.id));
     m.insert("name".into(), json!(folder.meta.name));
+    if let Some(desc) = &folder.meta.description {
+        m.insert("description".into(), json!(desc));
+    }
     m.insert(
         "item".into(),
         Value::Array(folder.items.iter().map(emit_item).collect()),

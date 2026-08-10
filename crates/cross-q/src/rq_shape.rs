@@ -66,12 +66,17 @@ pub fn kvs_to_json(kvs: &[KeyValue]) -> Value {
         kvs.iter()
             .enumerate()
             .map(|(i, kv)| {
-                json!({
-                    "id": i as u64,
-                    "key": kv.key,
-                    "value": kv.value,
-                    "isEnabled": kv.enabled,
-                })
+                let mut m = serde_json::Map::new();
+                m.insert("id".into(), json!(i as u64));
+                m.insert("key".into(), json!(kv.key));
+                m.insert("value".into(), json!(kv.value));
+                m.insert("isEnabled".into(), json!(kv.enabled));
+                // The app carries a header/param `description` when the source had one; emit
+                // it only when present (matches `...(description ? {description} : {})`).
+                if let Some(desc) = &kv.description {
+                    m.insert("description".into(), json!(desc));
+                }
+                Value::Object(m)
             })
             .collect(),
     )
@@ -82,11 +87,17 @@ pub fn path_vars_to_json(pvs: &[PathVar]) -> Value {
     Value::Array(
         pvs.iter()
             .map(|pv| {
-                json!({
-                    "key": pv.key,
-                    "value": pv.value,
-                    "dataType": format!("{:?}", pv.data_type).to_lowercase(),
-                })
+                let mut m = serde_json::Map::new();
+                m.insert("key".into(), json!(pv.key));
+                m.insert("value".into(), json!(pv.value));
+                m.insert(
+                    "dataType".into(),
+                    json!(format!("{:?}", pv.data_type).to_lowercase()),
+                );
+                if let Some(desc) = &pv.description {
+                    m.insert("description".into(), json!(desc));
+                }
+                Value::Object(m)
             })
             .collect(),
     )

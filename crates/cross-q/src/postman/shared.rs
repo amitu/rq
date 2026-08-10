@@ -450,7 +450,7 @@ pub(super) fn parse_v2_tree(root: &Value, report: &mut Report, auth_fn: AuthFn) 
                 .unwrap_or_else(|| format!("pm-{}", slugify(&info_name))),
             info_name.clone(),
             "info",
-            None,
+            root.get("info").and_then(|i| obj_str(i, "description")),
         ),
         auth: auth_fn(root.get("auth"), report, "auth"),
         headers: Vec::new(),
@@ -493,7 +493,7 @@ fn parse_v2_item(item: &Value, report: &mut Report, locator: &str, auth_fn: Auth
         let name = obj_str(item, "name").unwrap_or_else(|| "folder".to_string());
         let id = obj_str(item, "id").unwrap_or_else(|| format!("pm-{}", slugify(&name)));
         Item::Collection(Box::new(Collection {
-            meta: record_meta(id, name, locator, None),
+            meta: record_meta(id, name, locator, obj_str(item, "description")),
             auth: auth_fn(item.get("auth"), report, &format!("{locator}.auth")),
             headers: Vec::new(),
             scripts: parse_scripts(field(item, "event", "events")),
