@@ -15,3 +15,6 @@ Cargo.lock.orig
 # wasm-pack scratch output (the shipped copy lives in packages/cross-q/engine{,-node})
 /crates/cq-wasm/pkg
 /crates/cq-wasm/pkg-node
+
+# Fetched Postman corpus (pinned, see tests/corpus/README.md) — never committed
+/crates/cross-q/tests/corpus/postman-transformer/
