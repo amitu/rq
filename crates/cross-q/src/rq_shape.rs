@@ -246,8 +246,129 @@ pub fn auth_to_rq(auth: &Auth) -> AuthMap {
             }))
         }
         Auth::OAuth1 { params } => auth_oauth1(params),
+        Auth::OAuth2 { params, .. } => auth_oauth2(params),
         other => AuthMap::Unsupported(format!("{other:?}")),
     }
+}
+
+/// Requestly's default OAuth2 callback URL (matches the app's `DEFAULT_CALLBACK_URL`).
+const DEFAULT_CALLBACK_URL: &str = "https://oauth.rqstag.com/callback";
+
+/// Map Postman OAuth 2.0 params → Requestly `oauth_2` (FR-25), a nested grant-specific
+/// `config`. Fields pass through verbatim (empty strings are legal). An absent/unknown grant
+/// salvages: hosted-flow fields → `authorization_code`; a pasted token → `manual`; otherwise
+/// `inherit`. Mirrors the app's `mapPostmanOAuth2`.
+fn auth_oauth2(params: &std::collections::BTreeMap<String, String>) -> AuthMap {
+    let g = |k: &str| params.get(k).cloned().unwrap_or_default();
+    let auth_url = g("authUrl");
+    // v2.1 uses `accessTokenUrl`; older exports/Newman use `tokenUrl`.
+    let token_url = {
+        let t = g("accessTokenUrl");
+        if t.is_empty() {
+            g("tokenUrl")
+        } else {
+            t
+        }
+    };
+    let callback_url = {
+        let c = g("callBackUrl");
+        if c.is_empty() {
+            DEFAULT_CALLBACK_URL.to_string()
+        } else {
+            c
+        }
+    };
+    let client_id = g("clientId");
+    let client_secret = g("clientSecret");
+    let scope = g("scope");
+    let state = g("state");
+
+    // The hosted authorization-code config (also the salvage target for an omitted grant).
+    let hosted_auth_code = || {
+        let mut c = serde_json::Map::new();
+        c.insert("grantType".into(), json!("authorization_code"));
+        c.insert("authUrl".into(), json!(auth_url));
+        c.insert("tokenUrl".into(), json!(token_url));
+        c.insert("callbackUrl".into(), json!(callback_url));
+        c.insert("clientId".into(), json!(client_id));
+        c.insert("clientSecret".into(), json!(client_secret));
+        c.insert("scope".into(), json!(scope));
+        if !state.is_empty() {
+            c.insert("state".into(), json!(state));
+        }
+        c.insert("mode".into(), json!("hosted"));
+        Value::Object(c)
+    };
+
+    let config = match g("grant_type").as_str() {
+        "authorization_code" => hosted_auth_code(),
+        "authorization_code_with_pkce" => {
+            let challenge = if g("challengeAlgorithm") == "plain" {
+                "plain"
+            } else {
+                "S256"
+            };
+            let mut c = serde_json::Map::new();
+            c.insert("grantType".into(), json!("authorization_code_pkce"));
+            c.insert("authUrl".into(), json!(auth_url));
+            c.insert("tokenUrl".into(), json!(token_url));
+            c.insert("callbackUrl".into(), json!(callback_url));
+            c.insert("clientId".into(), json!(client_id));
+            if !client_secret.is_empty() {
+                c.insert("clientSecret".into(), json!(client_secret));
+            }
+            c.insert("challengeMethod".into(), json!(challenge));
+            c.insert("scope".into(), json!(scope));
+            if !state.is_empty() {
+                c.insert("state".into(), json!(state));
+            }
+            c.insert("mode".into(), json!("hosted"));
+            Value::Object(c)
+        }
+        "client_credentials" => json!({
+            "grantType": "client_credentials", "tokenUrl": token_url,
+            "clientId": client_id, "clientSecret": client_secret, "scope": scope,
+        }),
+        "password_credentials" => {
+            let mut c = serde_json::Map::new();
+            c.insert("grantType".into(), json!("password"));
+            c.insert("tokenUrl".into(), json!(token_url));
+            c.insert("clientId".into(), json!(client_id));
+            if !client_secret.is_empty() {
+                c.insert("clientSecret".into(), json!(client_secret));
+            }
+            c.insert("username".into(), json!(g("username")));
+            c.insert("password".into(), json!(g("password")));
+            c.insert("scope".into(), json!(scope));
+            Value::Object(c)
+        }
+        "implicit" => {
+            let mut c = serde_json::Map::new();
+            c.insert("grantType".into(), json!("implicit"));
+            c.insert("authUrl".into(), json!(auth_url));
+            c.insert("callbackUrl".into(), json!(callback_url));
+            c.insert("clientId".into(), json!(client_id));
+            c.insert("scope".into(), json!(scope));
+            if !state.is_empty() {
+                c.insert("state".into(), json!(state));
+            }
+            c.insert("mode".into(), json!("hosted"));
+            Value::Object(c)
+        }
+        // No/unknown grant — salvage in priority order (matches the app's `default`).
+        _ => {
+            if !auth_url.is_empty() || !token_url.is_empty() {
+                hosted_auth_code()
+            } else {
+                let token = g("accessToken");
+                if token.is_empty() {
+                    return AuthMap::Mapped(json!({ "type": "inherit" }));
+                }
+                json!({ "grantType": "manual", "token": token })
+            }
+        }
+    };
+    AuthMap::Mapped(json!({ "type": "oauth_2", "config": config }))
 }
 
 /// Case-insensitively match `value` against `allowed`, returning the canonical entry, or
