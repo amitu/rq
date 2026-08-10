@@ -47,6 +47,37 @@ Every format maps through the one [Idealised Model](docs/IDEALISED.md), so a new
 single importer/exporter, not N×N glue. New Postman schema versions (v2.2+) are watched for
 automatically — see the CI tracking issues.
 
+## Scripts & JS dialects
+
+Most of these apps let you attach pre-request / post-response **JavaScript**. It's all the
+same language, but each app binds a **different SDK**, so a script is only portable if you
+know which dialect it's written in:
+
+| App | Script SDK |
+|---|---|
+| Postman | `pm.*` (+ legacy `postman.*`) |
+| Bruno | `bru.*` + `req`/`res`, with a `pm.*` compatibility shim |
+| Requestly | `rq.*` |
+| Insomnia | `insomnia.*` (+ `pm.*` compat) |
+| Hoppscotch | `pw.*` / `hopp.*` |
+
+cross-q's rule: **preserve the script verbatim and record its dialect — never blind-rewrite
+`pm.`→`rq.`**. Silently string-replacing someone's code is how converters corrupt it. So a
+Postman → Bruno conversion carries the `pm.*` script through tagged as `pm`; on export, if the
+script's dialect isn't the target's native one, that's a **reported diagnostic**, not a silent
+break (and Bruno, for one, runs `pm.*` via its own compat layer).
+
+Two things keep this from becoming an N×M translation matrix:
+
+- **Lift what isn't really code.** Assertions and variable get/set are often declarative, not
+  imperative — `pm.expect(...).to.eql(200)` ≈ Bruno's `assert { res.status: eq 200 }` ≈ Hurl's
+  `[Asserts]`. cross-q lifts those into **first-class IR** (`asserts`, `vars`), so they convert
+  with **zero** JS translation.
+- **Translate through one runtime, not per-pair.** Actually *executing* or transpiling across
+  dialects is the job of [`cross-q-context`](docs/CONTEXT.md) — a QuickJS `rq.*` runtime with
+  `pm.*`-compatible shims — not the converter. The converter carries source + dialect; the
+  runtime reconciles them.
+
 ## Docs
 
 - [`docs/cross-q.md`](docs/cross-q.md) — the cross-q converter: product + architecture.
