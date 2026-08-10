@@ -21,6 +21,7 @@ pub fn to_mapped_items(ws: &Workspace, report: &mut Report) -> Value {
     let mut requests = Vec::new();
     let mut examples = Vec::new();
     let mut environments = Vec::new();
+    let mut cookies = Vec::new();
 
     for coll in &ws.collections {
         walk_collection(
@@ -29,6 +30,7 @@ pub fn to_mapped_items(ws: &Workspace, report: &mut Report) -> Value {
             &mut collections,
             &mut requests,
             &mut examples,
+            &mut cookies,
             report,
         );
     }
@@ -50,6 +52,12 @@ pub fn to_mapped_items(ws: &Workspace, report: &mut Report) -> Value {
     if !environments.is_empty() {
         obj.insert("environments".into(), Value::Array(environments));
     }
+    // Saved-response cookies ride `mapped.cookies` (device-local jar, never bulk.create —
+    // ADR-105/106), deduped last-write-wins across the whole tree.
+    let cookies = rq_shape::dedupe_cookies(cookies);
+    if !cookies.is_empty() {
+        obj.insert("cookies".into(), Value::Array(cookies));
+    }
     Value::Object(obj)
 }
 
@@ -63,6 +71,7 @@ fn walk_collection(
     collections: &mut Vec<Value>,
     requests: &mut Vec<Value>,
     examples: &mut Vec<Value>,
+    cookies: &mut Vec<Value>,
     report: &mut Report,
 ) {
     let this_temp: Option<String> = if coll.meta.name.is_empty() {
@@ -117,6 +126,16 @@ fn walk_collection(
                     // Saved responses ride alongside as examples, parented to this request.
                     if let Protocol::Http(parent_http) = &req.protocol {
                         for (i, ex) in req.examples.iter().enumerate() {
+                            // Saved-response cookies resolve against the example's own request
+                            // URL (its `originalRequest`), else the parent request's URL.
+                            if let Some(resp) = &ex.response {
+                                let url = ex
+                                    .request
+                                    .as_ref()
+                                    .map(|h| h.url.raw.as_str())
+                                    .unwrap_or(parent_http.url.raw.as_str());
+                                cookies.extend(rq_shape::cookies_from_response(resp, url));
+                            }
                             examples.push(example_item(
                                 ex,
                                 &req.meta.id,
@@ -128,9 +147,15 @@ fn walk_collection(
                     }
                 }
             }
-            Item::Collection(child) => {
-                walk_collection(child, child_parent, collections, requests, examples, report)
-            }
+            Item::Collection(child) => walk_collection(
+                child,
+                child_parent,
+                collections,
+                requests,
+                examples,
+                cookies,
+                report,
+            ),
         }
     }
 }

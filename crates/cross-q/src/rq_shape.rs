@@ -29,6 +29,208 @@ pub fn truncate_name(name: &str, max: usize) -> String {
     format!("{}…", String::from_utf16_lossy(&units[..cut]))
 }
 
+// --- saved-response cookies (ADR-107) --------------------------------------
+//
+// Port of the app's `collectCookies` / `postmanCookieToCookie` / `structuredCookieToCookie`.
+// Postman saved responses carry a `cookie[]`; each becomes a Requestly `Cookie` resolved
+// against the response's request URL (its own `originalRequest`, else the parent request).
+// These ride `mapped.cookies` (the SDK routes them to the device-local cookie jar, never
+// bulk.create). CHIPS partition state lives in three flat `extraAttributes` keys.
+
+/// Extract Requestly cookies from a Postman saved-response object's `cookie[]`, resolved
+/// against `request_url`. Nameless placeholder cookies (a Postman saved-response artifact) are
+/// dropped, matching the app.
+pub fn cookies_from_response(response: &Value, request_url: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    if let Some(Value::Array(arr)) = response.get("cookie") {
+        for pm in arr {
+            if let Some(c) = postman_cookie_to_cookie(pm, request_url) {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+fn postman_cookie_to_cookie(pm: &Value, request_url: &str) -> Option<Value> {
+    // A nameless cookie is meaningless to us — drop it (mirrors the app). An empty *value* is
+    // legal; only the name gates the drop. `??`-style nullish defaults: a present-but-empty
+    // domain/path is kept; an absent one falls back (RFC 6265 §5.2).
+    let name = pm.get("name").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+    let value = pm.get("value").and_then(Value::as_str).unwrap_or("");
+    let domain = pm
+        .get("domain")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| url_host(request_url));
+    let path = pm.get("path").and_then(Value::as_str).unwrap_or("/");
+    let secure = pm.get("secure").and_then(Value::as_bool).unwrap_or(false);
+    let http_only = pm.get("httpOnly").and_then(Value::as_bool).unwrap_or(false);
+
+    let mut cookie = serde_json::Map::new();
+    cookie.insert("kind".into(), json!("core-v1"));
+    cookie.insert("name".into(), json!(name));
+    cookie.insert("value".into(), json!(value));
+    cookie.insert("domain".into(), json!(domain));
+    cookie.insert("path".into(), json!(path));
+    cookie.insert("secure".into(), json!(secure));
+    cookie.insert("httpOnly".into(), json!(http_only));
+    cookie.insert("expiry".into(), cookie_expiry(pm.get("expires")));
+
+    // CHIPS partition key (ADR-107): only when `partitioned === true` and the request URL is
+    // http(s) — the three-key `extraAttributes` invariant, matching `setPartitionKey`.
+    if pm.get("partitioned").and_then(Value::as_bool) == Some(true) {
+        if let Some((scheme, top_level_site)) = url_top_level_site(request_url) {
+            cookie.insert(
+                "extraAttributes".into(),
+                json!({
+                    "Partitioned": true,
+                    "PartitionScheme": scheme,
+                    "PartitionTopLevelSite": top_level_site,
+                }),
+            );
+        }
+    }
+    Some(Value::Object(cookie))
+}
+
+/// Postman `expires` (string | number | absent) → Requestly `expiry`. A finite number is epoch
+/// SECONDS (Postman's serialization) → absolute ISO; a parseable ISO string → absolute; empty /
+/// absent / unparseable → session. Mirrors `normalisePostmanExpiry` + `parseExpires`.
+fn cookie_expiry(expires: Option<&Value>) -> Value {
+    match expires {
+        Some(Value::Number(n)) => match n.as_f64() {
+            Some(f) if f.is_finite() => json!({ "type": "absolute", "date": epoch_ms_to_iso((f * 1000.0) as i64) }),
+            _ => json!({ "type": "session" }),
+        },
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            match if t.is_empty() { None } else { canonical_iso(t) } {
+                Some(iso) => json!({ "type": "absolute", "date": iso }),
+                None => json!({ "type": "session" }),
+            }
+        }
+        _ => json!({ "type": "session" }),
+    }
+}
+
+/// Dedupe cookies last-write-wins keyed by name+domain+path (mirrors
+/// `dedupeCookiesLastWriteWins`), preserving first-seen order.
+pub fn dedupe_cookies(cookies: Vec<Value>) -> Vec<Value> {
+    use std::collections::HashMap;
+    let mut order: Vec<String> = Vec::new();
+    let mut by_key: HashMap<String, Value> = HashMap::new();
+    for c in cookies {
+        let key = format!(
+            "{}\u{0}{}\u{0}{}",
+            c.get("name").and_then(Value::as_str).unwrap_or(""),
+            c.get("domain").and_then(Value::as_str).unwrap_or(""),
+            c.get("path").and_then(Value::as_str).unwrap_or(""),
+        );
+        if !by_key.contains_key(&key) {
+            order.push(key.clone());
+        }
+        by_key.insert(key, c);
+    }
+    order.into_iter().filter_map(|k| by_key.remove(&k)).collect()
+}
+
+/// The request URL's host — `new URL(url).hostname`, with the app's fallback: an unparseable
+/// URL (e.g. a bare `{{var}}`) yields the whole string.
+fn url_host(raw: &str) -> String {
+    match split_scheme_host(raw) {
+        Some((_, host)) => host,
+        None => raw.to_string(),
+    }
+}
+
+/// The CHIPS top-level site — `(scheme, "scheme://host")` — only for an http(s) URL that parses.
+fn url_top_level_site(raw: &str) -> Option<(String, String)> {
+    let (scheme, host) = split_scheme_host(raw)?;
+    if scheme == "https" || scheme == "http" {
+        Some((scheme.clone(), format!("{scheme}://{host}")))
+    } else {
+        None
+    }
+}
+
+/// Split `scheme://[userinfo@]host[:port][/...]` into `(scheme, host)`. `None` when there is no
+/// `://` or the host is empty (mirrors `new URL()` throwing).
+fn split_scheme_host(raw: &str) -> Option<(String, String)> {
+    let idx = raw.find("://")?;
+    let scheme = raw[..idx].to_ascii_lowercase();
+    let rest = &raw[idx + 3..];
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = host_port.split(':').next().unwrap_or(host_port);
+    if host.is_empty() {
+        None
+    } else {
+        Some((scheme, host.to_string()))
+    }
+}
+
+/// Validate + canonicalize an ISO-8601 UTC timestamp to `YYYY-MM-DDTHH:MM:SS.sssZ` (what JS
+/// `new Date(s).toISOString()` yields). Returns `None` for anything not in that basic form —
+/// which falls back to a session cookie, never a wrong date.
+fn canonical_iso(s: &str) -> Option<String> {
+    // Expect `YYYY-MM-DDTHH:MM:SS` then optional `.fff` then optional `Z`.
+    let bytes = s.as_bytes();
+    if s.len() < 19 {
+        return None;
+    }
+    let digits = |a: usize, b: usize| -> Option<u32> {
+        let sub = s.get(a..b)?;
+        if sub.bytes().all(|c| c.is_ascii_digit()) {
+            sub.parse().ok()
+        } else {
+            None
+        }
+    };
+    if bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || bytes.get(10) != Some(&b'T')
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+    {
+        return None;
+    }
+    let (y, mo, d) = (digits(0, 4)?, digits(5, 7)?, digits(8, 10)?);
+    let (h, mi, se) = (digits(11, 13)?, digits(14, 16)?, digits(17, 19)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 59 {
+        return None;
+    }
+    // Milliseconds: first up to 3 fractional digits after '.', if present.
+    let mut ms = 0u32;
+    if bytes.get(19) == Some(&b'.') {
+        let frac: String = s[20..].chars().take_while(|c| c.is_ascii_digit()).take(3).collect();
+        if !frac.is_empty() {
+            ms = format!("{frac:0<3}").parse().unwrap_or(0);
+        }
+    }
+    Some(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}.{ms:03}Z"))
+}
+
+/// Epoch milliseconds → `YYYY-MM-DDTHH:MM:SS.sssZ` (UTC), byte-identical to JS
+/// `new Date(ms).toISOString()`. Civil-date-from-days per Howard Hinnant's algorithm; no crate.
+fn epoch_ms_to_iso(ms: i64) -> String {
+    let days = ms.div_euclid(86_400_000);
+    let rem = ms.rem_euclid(86_400_000);
+    let (h, mi, se, msec) = (rem / 3_600_000, (rem % 3_600_000) / 60_000, (rem % 60_000) / 1000, rem % 1000);
+    // civil_from_days
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{se:02}.{msec:03}Z")
+}
+
 pub fn schema_url(base: &str) -> String {
     format!("https://assets.requestly.com/local/v{RQ_SCHEMA_VERSION}/{base}.json")
 }
