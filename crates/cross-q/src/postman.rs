@@ -11,8 +11,11 @@
 //!
 //! Version-agnostic leaf primitives (coercion, kv, bodies, scripts, auth building, the v2
 //! tree walk) live in [`shared`], so the version modules compose rather than copy-paste.
-//! Tolerant by design (Postel inbound): coerce the unambiguous, drop the ambiguous, report
-//! both — never abort on a valid collection (RQ-3458).
+//!
+//! **Strict by default.** Version/structure detection fails loud (a v2-shaped doc with no
+//! recognized `info.schema` is rejected, not guessed). cross-q is tolerant only where a
+//! real reason forces it — the one such case is RQ-3458 key coercion (real exports emit
+//! null/numeric keys; coerce the unambiguous, drop the ambiguous, and report both).
 
 use serde_json::Value;
 
@@ -112,10 +115,12 @@ mod tests {
     }
 
     #[test]
-    fn v2_shaped_without_schema_marker_still_parses() {
-        // Tolerant: no info.schema → defaults to v2.1 (not fail-loud).
-        let (ws, _) = parse(r#"{ "info": { "name": "NoMarker" }, "item": [] }"#);
-        assert_eq!(ws.collections[0].meta.name, "NoMarker");
+    fn v2_shaped_without_schema_marker_fails_loud() {
+        // Strict by default: no info.schema → reject (matches the app), don't guess v2.1.
+        let mut r = Report::new(Fidelity::Lossless);
+        assert!(
+            parse_postman(r#"{ "info": { "name": "NoMarker" }, "item": [] }"#, &mut r).is_err()
+        );
     }
 
     #[test]

@@ -2,10 +2,11 @@
 //! marker is the `info.schema` URL (it encodes v2.0 vs v2.1); v1.0.0 is a structural signal
 //! (flat `requests[]`, no `info`, no `item[]`).
 //!
-//! Divergence from the app (deliberate, tolerant): where the app *fails loud* on a
-//! v2-shaped doc with an absent/unknown `info.schema`, cross-q defaults it to v2.1 (its
-//! tolerant ethos). This is a known parity item — the equivalence gate will flag the
-//! "missing marker" fixtures, and we decide then whether to match the app's fail-loud.
+//! Strict by default (matches the app's `detectPostmanVersion`): a v2-shaped doc with an
+//! absent or unrecognized `info.schema` **fails loud** rather than being guessed as v2.1.
+//! The published spec makes `info.schema` required; a silent baseline assumption is the
+//! kind of guess that masks import regressions. (cross-q is tolerant only where a real
+//! reason forces it — e.g. RQ-3458 key coercion — not here.)
 
 use serde_json::Value;
 
@@ -29,15 +30,14 @@ pub(super) fn detect_version(root: &Value) -> Result<PostmanVersion, String> {
         if s.contains("v2.0.0") {
             return Ok(PostmanVersion::V2_0);
         }
-        // Marker present but unrecognized — fall through to structural (tolerant).
+        // Marker present but unrecognized — fail loud (name it), don't guess.
+        return Err(format!(
+            "unsupported Postman collection version marker: {s:?} (supported: v1.0.0, v2.0.0, v2.1.0)"
+        ));
     }
 
-    // v2-shaped (has `item[]`): default to v2.1 when the marker is absent/unknown.
-    if root.get("item").is_some() {
-        return Ok(PostmanVersion::V2_1);
-    }
-
-    // v1.0.0: flat `requests[]`, no `info` wrapper, no `item[]` (positive v1 signal).
+    // No `info.schema`. v1.0.0 is a positive structural signal: flat `requests[]`, no
+    // `info` wrapper, no `item[]`.
     if root.get("requests").map(Value::is_array).unwrap_or(false)
         && root.get("info").is_none()
         && root.get("item").is_none()
@@ -45,7 +45,9 @@ pub(super) fn detect_version(root: &Value) -> Result<PostmanVersion, String> {
         return Ok(PostmanVersion::V1_0);
     }
 
-    Err("not a Postman collection (no info.schema, no item[], no requests[])".to_string())
+    // A v2-shaped doc (has `item[]`) with no marker, or anything else: fail loud. No v2.1
+    // baseline fallback — strict by default.
+    Err("not a supported Postman collection: missing info.schema (v2 requires it) and no v1 requests[] signal".to_string())
 }
 
 #[cfg(test)]
@@ -62,9 +64,18 @@ mod tests {
     }
 
     #[test]
-    fn v2_shaped_without_marker_defaults_v2_1() {
+    fn v2_shaped_without_marker_fails_loud() {
+        // Strict: a v2-shaped doc with no info.schema is rejected, not guessed as v2.1.
         let d = detect_version(&json!({ "info": { "name": "C" }, "item": [] }));
-        assert_eq!(d, Ok(PostmanVersion::V2_1));
+        assert!(d.is_err());
+    }
+
+    #[test]
+    fn unknown_marker_fails_loud() {
+        let d = detect_version(
+            &json!({ "info": { "name": "C", "schema": "…/v9.9.9/collection.json" }, "item": [] }),
+        );
+        assert!(d.is_err());
     }
 
     #[test]
