@@ -26,9 +26,9 @@ crates/cross-q/tests/corpus/fetch-postman-corpus.sh   # one-time, into the gitig
 cargo test -p cross-q --test postman_corpus
 ```
 
-`tests/postman_corpus.rs` **skips gracefully** if the corpus hasn't been fetched, so a
-plain `cargo test` never fails for lack of network. CI runs the fetch step first, so the
-corpus test runs for real there.
+`tests/postman_corpus.rs` **fails loud** if the corpus hasn't been fetched (a corpus test
+that silently skipped would be a false green). Run the fetch script once; CI runs it before
+tests.
 
 ## Attribution & license
 

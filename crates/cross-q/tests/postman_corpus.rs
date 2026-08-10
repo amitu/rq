@@ -1,9 +1,9 @@
 //! Corpus test — run cross-q's Postman parser over Postman's own transformer example
 //! collections (v1.0.0 / v2.0.0 / v2.1.0), fetched to a pinned SHA (see `tests/corpus/`).
 //!
-//! Skips gracefully if the corpus hasn't been fetched (run
-//! `tests/corpus/fetch-postman-corpus.sh`), so a plain `cargo test` never fails for lack of
-//! network. CI fetches first, so it runs for real there. This validates the parsers against
+//! **Fails loud if the corpus hasn't been fetched** (run
+//! `tests/corpus/fetch-postman-corpus.sh` once; CI runs it before tests) — a corpus test
+//! that silently skipped would be a false green. This validates the parsers against
 //! Postman's *own* definition of the format across all three versions — not just our own
 //! fixtures.
 
@@ -19,12 +19,14 @@ fn corpus_dir() -> PathBuf {
 #[test]
 fn parses_postman_transformer_corpus() {
     let base = corpus_dir();
-    if !base.exists() {
-        eprintln!(
-            "SKIP postman corpus — not fetched. Run: crates/cross-q/tests/corpus/fetch-postman-corpus.sh"
-        );
-        return;
-    }
+    // Fail loud, never silently green: a corpus test that quietly skips tested nothing.
+    // The corpus is fetched (pinned SHA), not vendored — run the fetch script once
+    // (CI runs it before tests). See tests/corpus/README.md.
+    assert!(
+        base.exists(),
+        "postman corpus not fetched — run `crates/cross-q/tests/corpus/fetch-postman-corpus.sh` \
+         (pinned snapshot; not vendored — see tests/corpus/README.md)"
+    );
 
     // Intentionally-malformed fixtures that are *allowed* to fail parsing (they exist to
     // exercise loud failure). Everything else must parse into a MappedItems object.
