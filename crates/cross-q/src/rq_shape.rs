@@ -326,12 +326,25 @@ fn auth_oauth1(params: &std::collections::BTreeMap<String, String>) -> AuthMap {
 
 /// Assemble the Requestly `httpRequestSchema` object (the `request` field of an HTTP
 /// `apiEntry`): `{ url, method, headers, queryParams, pathVariables, body, contentType }`.
+/// Requestly's `RequestMethod` is a **closed enum** (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS)
+/// validated by the persistence schema. Any other method (TRACE, WebDAV verbs like COPY, a
+/// custom method) would be rejected on import — so, at the Requestly boundary only, coerce
+/// the unknowns to GET, matching the app's `mapHttpMethodResult`. (Postman export keeps the
+/// verbatim method — this coercion is Requestly-specific.)
+fn requestly_method(method: &cq_model::Method) -> String {
+    let m = String::from(method.clone());
+    match m.as_str() {
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS" => m,
+        _ => "GET".to_string(),
+    }
+}
+
 pub fn http_request_object(http: &HttpRequest) -> Value {
     let mut obj = serde_json::Map::new();
     obj.insert("url".into(), Value::String(http.url.raw.clone()));
     obj.insert(
         "method".into(),
-        Value::String(String::from(http.method.clone())),
+        Value::String(requestly_method(&http.method)),
     );
     obj.insert("headers".into(), kvs_to_json(&http.headers));
     obj.insert("queryParams".into(), kvs_to_json(&http.query));

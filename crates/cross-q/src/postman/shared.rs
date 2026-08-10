@@ -662,17 +662,21 @@ pub(super) fn parse_path_vars(url: Option<&Value>) -> Vec<PathVar> {
     if let Some(Value::Object(o)) = url {
         if let Some(Value::Array(vars)) = o.get("variable") {
             for v in vars {
-                if let Some(key) = v.get("key").and_then(Value::as_str) {
-                    out.push(PathVar {
-                        key: key.to_string(),
-                        value: coerce_value(v.get("value")),
-                        data_type: ScalarType::default(),
-                        description: v
-                            .get("description")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                    });
-                }
+                // Keep every variable (the app maps all of `url.variable[]`); a missing
+                // `key` becomes "" rather than dropping the entry.
+                out.push(PathVar {
+                    key: v
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    value: coerce_value(v.get("value")),
+                    data_type: ScalarType::default(),
+                    description: v
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                });
             }
         }
     }
