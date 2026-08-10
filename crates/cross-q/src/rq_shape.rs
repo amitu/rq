@@ -229,8 +229,99 @@ pub fn auth_to_rq(auth: &Auth) -> AuthMap {
             "value": value,
             "placement": format!("{placement:?}").to_lowercase(),
         })),
+        Auth::Digest { params } => {
+            let g = |k: &str| params.get(k).cloned().unwrap_or_default();
+            AuthMap::Mapped(json!({
+                "type": "digest_auth",
+                "username": g("username"),
+                "password": g("password"),
+                "algorithm": canon_enum(
+                    &g("algorithm"),
+                    &["MD5", "MD5-sess", "SHA-256", "SHA-256-sess", "SHA-512-256", "SHA-512-256-sess"],
+                    "MD5",
+                ),
+                "qop": canon_enum(&g("qop"), &["auth", "auth-int"], "auth"),
+                "realm": "", "nonce": "", "nonceCount": "", "clientNonce": "",
+                "opaque": "", "disableRetry": false,
+            }))
+        }
+        Auth::OAuth1 { params } => auth_oauth1(params),
         other => AuthMap::Unsupported(format!("{other:?}")),
     }
+}
+
+/// Case-insensitively match `value` against `allowed`, returning the canonical entry, or
+/// `default` — mirrors the app's `canonicalEnum` (used for digest algorithm/qop).
+fn canon_enum(value: &str, allowed: &[&str], default: &str) -> String {
+    allowed
+        .iter()
+        .find(|a| a.eq_ignore_ascii_case(value))
+        .copied()
+        .unwrap_or(default)
+        .to_string()
+}
+
+/// Map Postman OAuth 1.0 params → Requestly `oauth1` (FR-24). An unsupported signature
+/// method falls back to `inherit`, matching the app.
+fn auth_oauth1(params: &std::collections::BTreeMap<String, String>) -> AuthMap {
+    let g = |k: &str| params.get(k).cloned().unwrap_or_default();
+    let b = |k: &str, d: bool| params.get(k).map(|v| v == "true").unwrap_or(d);
+
+    let raw_method = {
+        let m = g("signatureMethod");
+        if m.is_empty() {
+            "HMAC-SHA1".to_string()
+        } else {
+            m
+        }
+    };
+    const SUPPORTED: &[&str] = &[
+        "HMAC-SHA1",
+        "HMAC-SHA256",
+        "HMAC-SHA512",
+        "PLAINTEXT",
+        "RSA-SHA1",
+        "RSA-SHA256",
+        "RSA-SHA512",
+    ];
+    if !SUPPORTED.contains(&raw_method.as_str()) {
+        // Unsupported signature method → inherit (the app does the same, with a warning).
+        return AuthMap::Mapped(json!({ "type": "inherit" }));
+    }
+    let signing = if raw_method.starts_with("RSA") {
+        json!({ "signatureMethod": raw_method, "privateKey": g("privateKey") })
+    } else {
+        json!({ "signatureMethod": raw_method })
+    };
+    let mut cfg = serde_json::Map::new();
+    cfg.insert("type".into(), json!("oauth_1"));
+    cfg.insert("consumerKey".into(), json!(g("consumerKey")));
+    cfg.insert("consumerSecret".into(), json!(g("consumerSecret")));
+    cfg.insert("accessToken".into(), json!(g("token"))); // Postman calls it `token`
+    cfg.insert("tokenSecret".into(), json!(g("tokenSecret")));
+    cfg.insert("signing".into(), signing);
+    cfg.insert(
+        "parameterTransmission".into(),
+        json!(if b("addParamsToHeader", true) {
+            "header"
+        } else {
+            "body"
+        }),
+    );
+    cfg.insert("includeBodyHash".into(), json!(b("bodyHash", false)));
+    cfg.insert(
+        "addEmptyParametersToSignature".into(),
+        json!(b("addEmptyParametersToSignature", false)),
+    );
+    cfg.insert(
+        "encodeOAuthParametersInHeader".into(),
+        json!(b("encodeOAuthParametersInHeader", true)),
+    );
+    let realm = g("realm");
+    if !realm.is_empty() {
+        cfg.insert("realm".into(), json!(realm));
+    }
+    AuthMap::Mapped(Value::Object(cfg))
 }
 
 /// Assemble the Requestly `httpRequestSchema` object (the `request` field of an HTTP
