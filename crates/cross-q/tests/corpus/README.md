@@ -1,14 +1,18 @@
-# Postman corpora (pinned fetch, not vendored)
+# Test corpora (pinned fetch, not vendored)
 
-cross-q's Postman parsers are validated against **two** corpora with **different jobs**.
-Neither is vendored: provider/demo collections carry secret-shaped placeholder values that
-correctly trip secret scanners, so we commit a pinned SHA + a fetch script and keep the
-downloaded data **gitignored**. Deterministic (pinned), reproducible, no secrets in the repo.
+cross-q's parsers are validated against **real, third-party collections** — not just our own
+fixtures. Nothing here is vendored: provider/demo collections carry secret-shaped placeholder
+values that correctly trip secret scanners, so for each corpus we commit a pinned SHA + a
+fetch script and keep the downloaded data **gitignored**. Deterministic (pinned SHA),
+reproducible, no secrets in the repo, not redistributed. Every corpus test **fails loud** if
+its data isn't fetched (a corpus test that silently skipped would be a false green); CI runs
+the fetch scripts before tests.
 
-| Corpus | Job | Canonical? | Test |
-|---|---|---|---|
-| **real-world** (Adyen, newman) | **fidelity** — no hollow parse, bounded round-trip loss | ✅ yes | `postman_realworld.rs` |
-| **transformer** (postman-collection-transformer) | **crash-safety / tolerance** — never panic on odd input | ❌ non-canonical dialect | `postman_corpus.rs` |
+| Corpus | Format | Job | Canonical? | Test |
+|---|---|---|---|---|
+| **real-world** (Adyen, newman) | Postman | **fidelity** — no hollow parse, bounded round-trip loss | ✅ yes | `postman_realworld.rs` |
+| **transformer** (postman-collection-transformer) | Postman | **crash-safety / tolerance** — never panic on odd input | ❌ non-canonical dialect | `postman_corpus.rs` |
+| **bruno-testbench** (usebruno/bruno) | Bruno | **fidelity** — no hollow parse over a real directory tree | ✅ yes | `bruno_corpus.rs` |
 
 ## 1. Real-world corpus — the fidelity oracle
 
@@ -46,12 +50,26 @@ lives in the real-world corpus above.
 Pin: `postman-transformer.pin`. Fetch: `fetch-postman-corpus.sh` → gitignored
 `./postman-transformer/`. Test: `postman_corpus.rs`.
 
+## 3. Bruno corpus — the directory-import fidelity oracle
+
+[`usebruno/bruno`](https://github.com/usebruno/bruno)'s own `bruno-tests` collection (MIT) —
+a large, canonical `.bru` v2 **directory tree**: nested folders, `environments/*.bru`,
+`collection.bru`/`folder.bru` inheritance, and every auth/body type. Same role for the Bruno
+directory importer that Adyen plays for Postman.
+
+Pin: `bruno.pin`. Fetch: `fetch-bruno-corpus.sh` → gitignored `./bruno-testbench/`. Test:
+`bruno_corpus.rs` reads the tree into the virtual-FS map the host would pass, then asserts
+**no hollow parse** — every request `.bru` file becomes a request in the workspace (equal
+counts) — plus that folders come through as nested collections and environments carry their
+variables.
+
 ## Running
 
 ```bash
-crates/cross-q/tests/corpus/fetch-realworld-corpus.sh   # fidelity corpus (Adyen + newman)
-crates/cross-q/tests/corpus/fetch-postman-corpus.sh     # crash-safety corpus (transformer)
-cargo test -p cross-q --test postman_realworld --test postman_corpus
+crates/cross-q/tests/corpus/fetch-realworld-corpus.sh   # Postman fidelity (Adyen + newman)
+crates/cross-q/tests/corpus/fetch-postman-corpus.sh     # Postman crash-safety (transformer)
+crates/cross-q/tests/corpus/fetch-bruno-corpus.sh       # Bruno fidelity (bruno-testbench)
+cargo test -p cross-q --test postman_realworld --test postman_corpus --test bruno_corpus
 ```
 
 Both tests **fail loud** if their corpus hasn't been fetched — a corpus test that silently
@@ -67,3 +85,4 @@ redistributed, not relicensed. This repository is MIT.
 - newman examples © Postman, Inc., **Apache-2.0** (https://github.com/postmanlabs/newman/blob/develop/LICENSE.md).
 - transformer examples © Postman, Inc. and contributors, **Apache-2.0**
   (https://github.com/postmanlabs/postman-collection-transformer/blob/main/LICENSE.md).
+- bruno-tests collection © usebruno, **MIT** (https://github.com/usebruno/bruno/blob/main/license.md).

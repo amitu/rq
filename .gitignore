@@ -19,3 +19,4 @@ Cargo.lock.orig
 # Fetched Postman corpus (pinned, see tests/corpus/README.md) — never committed
 /crates/cross-q/tests/corpus/postman-transformer/
 /crates/cross-q/tests/corpus/realworld/
+/crates/cross-q/tests/corpus/bruno-testbench/

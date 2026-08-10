@@ -61,6 +61,7 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
         items.push(Item::Collection(Box::new(Collection {
             meta: shared::record_meta(fid, fname, &floc, shared::obj_str(folder, "description")),
             auth: None,
+            headers: Vec::new(),
             scripts: Scripts::default(),
             variables: Vec::new(),
             items: fitems,
@@ -105,6 +106,7 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
             shared::obj_str(root, "description"),
         ),
         auth: None,
+        headers: Vec::new(),
         scripts: Scripts::default(),
         variables: Vec::new(),
         items,

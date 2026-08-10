@@ -444,6 +444,7 @@ pub(super) fn parse_v2_tree(root: &Value, report: &mut Report, auth_fn: AuthFn) 
             None,
         ),
         auth: auth_fn(root.get("auth"), report, "auth"),
+        headers: Vec::new(),
         scripts: parse_scripts(root.get("event")),
         variables: parse_variables(root.get("variable")),
         items,
@@ -485,6 +486,7 @@ fn parse_v2_item(item: &Value, report: &mut Report, locator: &str, auth_fn: Auth
         Item::Collection(Box::new(Collection {
             meta: record_meta(id, name, locator, None),
             auth: auth_fn(item.get("auth"), report, &format!("{locator}.auth")),
+            headers: Vec::new(),
             scripts: parse_scripts(item.get("event")),
             variables: Vec::new(),
             items: parse_v2_items(item.get("item"), report, locator, auth_fn),

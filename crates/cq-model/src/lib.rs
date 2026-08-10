@@ -162,6 +162,10 @@ pub struct Collection {
     pub meta: RecordMeta,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<Auth>,
+    /// Headers declared on the folder/collection and inherited by descendant requests
+    /// (Bruno `collection.bru`/`folder.bru` `headers`, Insomnia folder headers).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<KeyValue>,
     #[serde(default, skip_serializing_if = "Scripts::is_empty")]
     pub scripts: Scripts,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -33,7 +33,7 @@ holistic (all of a version's features in one go), not feature-by-feature.
 | **Requestly** | `LOCAL_FS` 1.12.0 | 🔜 | ✅ | the git-native on-disk tree |
 | **Requestly** | `MappedItems` (bulk-create) | — | ✅ | the app's in-memory import contract |
 | **Requestly** | export envelope 1.1.0 | 🔜 | 🔜 | single-file export |
-| **Bruno** | `.bru` v2 | 🏗️ | 🔜 | text DSL — request-level import done; folder-tree ingestion next |
+| **Bruno** | `.bru` v2 | ✅ | 🔜 | text DSL — requests, folder tree, environments, inheritance; exporter next |
 | **Insomnia** | v4 / v5 | 🔜 | 🔜 | |
 | **OpenAPI** | 3.0 / 3.1, Swagger 2.0 | 🔜 | 🔜 | |
 | **HAR** | 1.2 | 🔜 | — | capture → requests |
@@ -63,6 +63,31 @@ cargo fmt --check
 ```
 
 Rust 1.85+ (2021 edition). One workspace, one version train.
+
+## Testing
+
+Reliability is the product, so the tests are the spec. Three layers:
+
+1. **Unit tests** next to each parser — the format's shapes and edge cases, in-file.
+2. **Real third-party corpora**, not just our own fixtures — because the only way to know we
+   parse real Postman/Bruno is to run against collections real tools produced. We don't
+   vendor them (provider collections carry secret-shaped values that trip secret scanners);
+   instead each corpus is a **pinned commit + a fetch script**, downloaded into a gitignored
+   dir. Reproducible, no secrets in the repo. See
+   [`crates/cross-q/tests/corpus/`](crates/cross-q/tests/corpus/):
+   - **Postman** — [Adyen](https://github.com/Adyen/adyen-postman) (canonical v2.1) +
+     [newman](https://github.com/postmanlabs/newman) (v2.0/v1), plus Postman's
+     transformer examples for crash-safety.
+   - **Bruno** — [usebruno's `bruno-tests`](https://github.com/usebruno/bruno) collection
+     (a real `.bru` directory tree: folders, environments, every auth/body type).
+3. **Fidelity gates, not "it parsed"** — each corpus test asserts **no hollow parse** (every
+   request in the source survives into the model — equal counts) and, for the same-format
+   round-trip, that field loss is bounded to a documented allowlist. A corpus test **fails
+   loud if its data isn't fetched** — a silent skip would be a false green. CI runs the fetch
+   scripts before the tests.
+
+The engine also ships as WASM (`@requestly/cross-q`); `packages/cross-q` has a Node smoke
+test that runs every importer through the compiled boundary.
 
 ## Why
 
