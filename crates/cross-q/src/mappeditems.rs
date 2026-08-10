@@ -90,6 +90,19 @@ fn walk_collection(
         if let Some(v) = rq_shape::requestly_auth_value(&coll.auth) {
             data.insert("auth".into(), v);
         }
+        // A collection-level auth kind with no Requestly equivalent (e.g. edgegrid) falls back
+        // to inherit AND is flagged advanced_auth, matching the app's mapper.
+        if let Some(a) = &coll.auth {
+            if let AuthMap::Unsupported(desc) = rq_shape::auth_to_rq(a) {
+                report.warn(
+                    Severity::Coerced,
+                    Phase::Emit,
+                    coll.meta.source.clone(),
+                    "advanced_auth",
+                    format!("collection auth kind '{desc}' has no Requestly equivalent; → inherit"),
+                );
+            }
+        }
         if let Some(scripts) = rq_shape::scripts_object(&coll.scripts) {
             data.insert("scripts".into(), scripts);
         }
@@ -285,9 +298,11 @@ fn request_item(req: &Request, parent_temp: Option<&str>, report: &mut Report) -
                 data.insert("auth".into(), json!({ "type": "no_auth" }));
             }
             AuthMap::Unsupported(desc) => {
-                report.coerced(
+                report.warn(
+                    Severity::Coerced,
                     Phase::Emit,
                     req.meta.source.clone(),
+                    "advanced_auth",
                     format!(
                         "auth kind '{desc}' on '{}' has no Requestly equivalent; → inherit",
                         req.meta.name
@@ -296,6 +311,36 @@ fn request_item(req: &Request, parent_temp: Option<&str>, report: &mut Report) -
                 data.insert("auth".into(), json!({ "type": "inherit" }));
             }
         },
+    }
+
+    // Advisory warnings mirroring the app's mapper warnings — surfaced as `warningKind`-tagged
+    // diagnostics the WASM shim aggregates into UnsupportedFeatureKind warnings. cross-q makes
+    // the same lossy decision (coerce a non-standard method to GET, keep a form-data file
+    // reference the user must re-attach); these flag it so the advisory matches. (binary_body is
+    // flagged at parse time, where the file body is dropped.)
+    let src_method = String::from(http.method.clone());
+    if !matches!(
+        src_method.as_str(),
+        "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+    ) {
+        report.warn(
+            Severity::Coerced,
+            Phase::Emit,
+            req.meta.source.clone(),
+            "unsupported_http_method",
+            format!("HTTP method '{src_method}' on '{}' coerced to GET", req.meta.name),
+        );
+    }
+    if let Some(cq_model::Body::FormData { fields }) = &http.body {
+        if fields.iter().any(|f| matches!(f, cq_model::FormField::File(_))) {
+            report.warn(
+                Severity::Coerced,
+                Phase::Emit,
+                req.meta.source.clone(),
+                "file_reference",
+                format!("form-data on '{}' references local files", req.meta.name),
+            );
+        }
     }
     if let Some(scripts) = rq_shape::scripts_object(&req.scripts) {
         data.insert("scripts".into(), scripts);

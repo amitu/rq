@@ -132,6 +132,25 @@ impl Report {
         self.push(Diagnostic::new(Severity::Error, phase, provenance, message));
     }
 
+    /// Record an advisory that maps to one of the consuming app's user-facing warning kinds.
+    /// Carries a machine-readable `warningKind` in `detail` so a WASM consumer can aggregate the
+    /// report's diagnostics into typed warnings without parsing free-form messages. `severity`
+    /// reflects what actually happened to the source construct (a coerced reshape vs a real drop),
+    /// so cross-q's own fidelity verdict stays accurate.
+    pub fn warn(
+        &mut self,
+        severity: Severity,
+        phase: Phase,
+        provenance: Provenance,
+        kind: &str,
+        message: impl Into<String>,
+    ) {
+        self.push(
+            Diagnostic::new(severity, phase, provenance, message)
+                .with_detail(serde_json::json!({ "warningKind": kind })),
+        );
+    }
+
     /// Count diagnostics of a given severity.
     pub fn count(&self, severity: Severity) -> usize {
         self.diagnostics

@@ -650,7 +650,9 @@ fn auth_oauth2(params: &std::collections::BTreeMap<String, String>) -> AuthMap {
             } else {
                 let token = g("accessToken");
                 if token.is_empty() {
-                    return AuthMap::Mapped(json!({ "type": "inherit" }));
+                    // Nothing to salvage — fall back to inherit AND flag it (the app warns
+                    // `advanced_auth`/oauth2_unmappable_grant); Unsupported drives both.
+                    return AuthMap::Unsupported("oauth2 (unmappable grant)".to_string());
                 }
                 json!({ "grantType": "manual", "token": token })
             }
@@ -694,8 +696,9 @@ fn auth_oauth1(params: &std::collections::BTreeMap<String, String>) -> AuthMap {
         "RSA-SHA512",
     ];
     if !SUPPORTED.contains(&raw_method.as_str()) {
-        // Unsupported signature method → inherit (the app does the same, with a warning).
-        return AuthMap::Mapped(json!({ "type": "inherit" }));
+        // Unsupported signature method → inherit AND flag it (the app warns `advanced_auth`/
+        // oauth1_signature_method); Unsupported drives both the inherit fallback and the warning.
+        return AuthMap::Unsupported("oauth1 (unsupported signature method)".to_string());
     }
     let signing = if raw_method.starts_with("RSA") {
         json!({ "signatureMethod": raw_method, "privateKey": g("privateKey") })

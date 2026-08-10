@@ -15,7 +15,7 @@ use cq_model::{
     PathVar, Protocol, Provenance, RecordMeta, Request, ScalarType, Script, ScriptDialect,
     ScriptLang, Scripts, SourceFormat, Url, Variable, Workspace,
 };
-use cq_report::{Phase, Report};
+use cq_report::{Phase, Report, Severity};
 
 pub(super) fn prov(locator: impl Into<String>) -> Provenance {
     Provenance {
@@ -277,9 +277,13 @@ pub(super) fn parse_body(v: Option<&Value>, report: &mut Report, locator: &str) 
             })
         }
         "file" => {
-            report.dropped(
+            // Dropped (the file itself can't ride the import) AND tagged binary_body so the
+            // shim surfaces the same advisory the app's mapper does.
+            report.warn(
+                Severity::Dropped,
                 Phase::Parse,
                 prov(format!("{locator}.file")),
+                "binary_body",
                 "file body cannot be carried without the file; emitted as no body",
             );
             None
@@ -597,9 +601,21 @@ pub(super) fn parse_request_obj(
             None,
         ),
         Some(r @ Value::Object(_)) => {
-            let method = r
-                .get("method")
-                .and_then(Value::as_str)
+            // An absent or empty method imports as GET but is flagged (the app warns
+            // `unsupported_http_method` with an empty `requested`). A present non-standard method
+            // (COPY/TRACE/…) becomes Method::Other/Trace and is flagged at emit time instead.
+            let method_str = r.get("method").and_then(Value::as_str);
+            if method_str.map(|m| m.trim().is_empty()).unwrap_or(true) {
+                report.warn(
+                    Severity::Coerced,
+                    Phase::Parse,
+                    prov(format!("{locator}.method")),
+                    "unsupported_http_method",
+                    "request has no HTTP method; imported as GET",
+                );
+            }
+            let method = method_str
+                .filter(|m| !m.trim().is_empty())
                 .map(|m| Method::from(m.to_string()))
                 .unwrap_or(Method::Get);
             let (url, query) = parse_url(r.get("url"), report, &format!("{locator}.url"));
