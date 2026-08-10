@@ -44,9 +44,10 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
     };
     for (fi, folder) in folders.iter().enumerate() {
         let fname = shared::obj_str(folder, "name").unwrap_or_else(|| "folder".to_string());
-        let fid = shared::obj_str(folder, "id")
-            .unwrap_or_else(|| format!("pm-{}", shared::slugify(&fname)));
         let floc = format!("folders[{fi}]");
+        // Unique fallback id from position (duplicate folder names must not collide).
+        let fid = shared::obj_str(folder, "id")
+            .unwrap_or_else(|| format!("pm-{}", shared::slugify(&floc)));
         let mut fitems = Vec::new();
         for id in id_order(folder.get("order")) {
             if let Some(req) = by_id.get(&id) {
