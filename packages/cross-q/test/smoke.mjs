@@ -27,7 +27,7 @@ ok('parse(curl) -> MappedItems with an http request');
 
 // 3. Postman import, incl. the RQ-3458 null/numeric-key case (must coerce, not fail)
 const postman = JSON.stringify({
-  info: { name: 'Nasty', _postman_id: 'abc' },
+  info: { name: 'Nasty', _postman_id: 'abc', schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json' },
   item: [
     { name: 'folder', item: [
       { name: 'login', request: {
