@@ -57,6 +57,7 @@ fn emit_item(item: &Item) -> Value {
 
 fn emit_folder(folder: &Collection) -> Value {
     let mut m = Map::new();
+    m.insert("id".into(), json!(folder.meta.id));
     m.insert("name".into(), json!(folder.meta.name));
     m.insert(
         "item".into(),
@@ -73,6 +74,7 @@ fn emit_folder(folder: &Collection) -> Value {
 
 fn emit_request(req: &Request) -> Value {
     let mut m = Map::new();
+    m.insert("id".into(), json!(req.meta.id));
     m.insert("name".into(), json!(req.meta.name));
     let Protocol::Http(http) = &req.protocol else {
         // non-HTTP protocols aren't representable in a Postman v2.1 request; emit the name
@@ -82,7 +84,10 @@ fn emit_request(req: &Request) -> Value {
 
     let mut request = Map::new();
     request.insert("method".into(), json!(String::from(http.method.clone())));
-    request.insert("url".into(), url_value(&http.url, &http.query));
+    request.insert(
+        "url".into(),
+        url_value(&http.url, &http.query, &http.path_variables),
+    );
     if !http.headers.is_empty() {
         request.insert("header".into(), headers_value(&http.headers));
     }
@@ -101,14 +106,38 @@ fn emit_request(req: &Request) -> Value {
     if let Some(ev) = event_array(&req.scripts) {
         m.insert("event".into(), ev);
     }
+    // Saved responses were captured verbatim on import — emit them back unchanged.
+    let responses: Vec<Value> = req
+        .examples
+        .iter()
+        .filter_map(|e| e.response.clone())
+        .collect();
+    if !responses.is_empty() {
+        m.insert("response".into(), Value::Array(responses));
+    }
     Value::Object(m)
 }
 
-fn url_value(url: &Url, query: &[KeyValue]) -> Value {
+fn url_value(url: &Url, query: &[KeyValue], path_vars: &[cq_model::PathVar]) -> Value {
     let mut m = Map::new();
     m.insert("raw".into(), json!(url.raw));
     if !query.is_empty() {
         m.insert("query".into(), headers_value(query));
+    }
+    if !path_vars.is_empty() {
+        let vars: Vec<Value> = path_vars
+            .iter()
+            .map(|pv| {
+                let mut o = Map::new();
+                o.insert("key".into(), json!(pv.key));
+                o.insert("value".into(), json!(pv.value));
+                if let Some(d) = &pv.description {
+                    o.insert("description".into(), json!(d));
+                }
+                Value::Object(o)
+            })
+            .collect();
+        m.insert("variable".into(), Value::Array(vars));
     }
     Value::Object(m)
 }
@@ -277,4 +306,53 @@ fn variables_value(vars: &[Variable]) -> Value {
             .map(|v| json!({ "key": v.key, "value": v.value, "type": "string" }))
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use cq_report::{Fidelity, Report};
+
+    // A canonical Postman v2.1 collection (singular `header`/`response`/`event`, per the
+    // official schema) — round-trips through IR and back, preserving examples, url path
+    // variables, and item ids. (The transformer `examples/` corpus uses a *non-canonical*
+    // plural dialect and is not a valid oracle for canonical v2.1.)
+    const CANONICAL: &str = r#"{
+      "info": { "name": "C", "_postman_id": "col-1",
+                "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+      "item": [
+        { "id": "req-1", "name": "get user",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "https://x.test/users/:id", "variable": [{ "key": "id", "value": "42" }] },
+            "header": [{ "key": "Accept", "value": "application/json" }]
+          },
+          "response": [
+            { "name": "200 OK", "code": 200, "status": "OK", "body": "{\"ok\":true}",
+              "header": [{ "key": "X-Trace", "value": "abc" }] }
+          ]
+        }
+      ]
+    }"#;
+
+    #[test]
+    fn canonical_v21_roundtrip_preserves_examples_pathvars_ids() {
+        let mut report = Report::new(Fidelity::Lossless);
+        let ws = crate::postman::parse_postman(CANONICAL, &mut report).expect("parse");
+        let out = super::to_postman(&ws);
+
+        let item = &out["item"][0];
+        assert_eq!(item["id"], serde_json::json!("req-1"), "item id preserved");
+        // url path variable survived
+        assert_eq!(
+            item["request"]["url"]["variable"][0]["key"],
+            serde_json::json!("id")
+        );
+        // saved response (example) survived verbatim, incl. nested fields
+        assert_eq!(item["response"][0]["code"], serde_json::json!(200));
+        assert_eq!(item["response"][0]["status"], serde_json::json!("OK"));
+        assert_eq!(
+            item["response"][0]["header"][0]["key"],
+            serde_json::json!("X-Trace")
+        );
+    }
 }

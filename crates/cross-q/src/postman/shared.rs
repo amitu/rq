@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use cq_model::{
-    Auth, Body, Collection, FormField, HttpRequest, Item, KeyValue, Method, ModelHeader, Protocol,
-    Provenance, RecordMeta, Request, Script, ScriptDialect, ScriptLang, Scripts, SourceFormat, Url,
-    Variable, Workspace,
+    Auth, Body, Collection, Example, FormField, HttpRequest, Item, KeyValue, Method, ModelHeader,
+    PathVar, Protocol, Provenance, RecordMeta, Request, ScalarType, Script, ScriptDialect,
+    ScriptLang, Scripts, SourceFormat, Url, Variable, Workspace,
 };
 use cq_report::{Phase, Report};
 
@@ -496,8 +496,16 @@ fn parse_v2_item(item: &Value, report: &mut Report, locator: &str, auth_fn: Auth
 fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: AuthFn) -> Request {
     let name = obj_str(item, "name").unwrap_or_else(|| "request".to_string());
     let req = item.get("request");
-    let (method, url, query, headers, body, auth) = match req {
-        Some(Value::String(s)) => (Method::Get, Url::raw(s), Vec::new(), Vec::new(), None, None),
+    let (method, url, query, path_variables, headers, body, auth) = match req {
+        Some(Value::String(s)) => (
+            Method::Get,
+            Url::raw(s),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        ),
         Some(r @ Value::Object(_)) => {
             let method = r
                 .get("method")
@@ -505,14 +513,16 @@ fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: A
                 .map(|m| Method::from(m.to_string()))
                 .unwrap_or(Method::Get);
             let (url, query) = parse_url(r.get("url"), report, &format!("{locator}.url"));
+            let path_variables = parse_path_vars(r.get("url"));
             let headers = parse_kv_array(r.get("header"), report, &format!("{locator}.header"));
             let body = parse_body(r.get("body"), report, &format!("{locator}.body"));
             let auth = auth_fn(r.get("auth"), report, &format!("{locator}.auth"));
-            (method, url, query, headers, body, auth)
+            (method, url, query, path_variables, headers, body, auth)
         }
         _ => (
             Method::Get,
             Url::default(),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             None,
@@ -534,11 +544,11 @@ fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: A
         url,
         headers,
         query,
-        path_variables: Vec::new(),
+        path_variables,
         body,
         settings: cq_model::RequestSettings::default(),
     };
-    http_request(
+    let mut request = http_request(
         NodeMeta {
             id,
             name,
@@ -548,5 +558,50 @@ fn parse_v2_request(item: &Value, report: &mut Report, locator: &str, auth_fn: A
         http,
         auth,
         parse_scripts(item.get("event")),
-    )
+    );
+    // Saved responses (`response[]`) → examples, stored verbatim so the round-trip is
+    // lossless (incl. Postman-internal fields like `_postman_previewlanguage`).
+    request.examples = parse_examples(item.get("response"), locator);
+    request
+}
+
+/// Postman saved responses (`response[]`) → examples. The full response object is kept
+/// verbatim in [`Example::response`] — lossless, and complex enough (originalRequest,
+/// headers, cookies, code/status/time) that verbatim capture beats partial modelling.
+pub(super) fn parse_examples(v: Option<&Value>, locator: &str) -> Vec<Example> {
+    let mut out = Vec::new();
+    if let Some(Value::Array(items)) = v {
+        for (i, resp) in items.iter().enumerate() {
+            let name = obj_str(resp, "name").unwrap_or_else(|| format!("example {i}"));
+            let id = obj_str(resp, "id").unwrap_or_else(|| format!("pm-ex-{}", slugify(&name)));
+            out.push(Example {
+                meta: record_meta(id, name, &format!("{locator}.response[{i}]"), None),
+                response: Some(resp.clone()),
+            });
+        }
+    }
+    out
+}
+
+/// Postman url `variable[]` (path variables, e.g. `:id`) → IR path variables.
+pub(super) fn parse_path_vars(url: Option<&Value>) -> Vec<PathVar> {
+    let mut out = Vec::new();
+    if let Some(Value::Object(o)) = url {
+        if let Some(Value::Array(vars)) = o.get("variable") {
+            for v in vars {
+                if let Some(key) = v.get("key").and_then(Value::as_str) {
+                    out.push(PathVar {
+                        key: key.to_string(),
+                        value: coerce_value(v.get("value")),
+                        data_type: ScalarType::default(),
+                        description: v
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    });
+                }
+            }
+        }
+    }
+    out
 }

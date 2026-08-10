@@ -5,8 +5,14 @@
 //! the category) or preserved verbatim in `ext[format]` (if genuinely idiosyncratic).
 //!
 //! We emit v2.1, so the fair round-trip is the v2.1 corpus. Fails loud if the corpus isn't
-//! fetched. For now this REPORTS the loss set (the todo list); it tightens to an
-//! assert-empty gate as we drive the losses to zero.
+//! fetched. For now this REPORTS the loss set (a triage aid).
+//!
+//! CAVEAT: the transformer `examples/` use a *non-canonical* v2.1 dialect (plural
+//! `headers`/`responses`/`events`), so much of the reported "loss" here is dialect noise,
+//! not real data loss. The authoritative fidelity proof is the canonical-keys round-trip
+//! unit test in `src/emit_postman.rs`; the corpus-wide fidelity gate belongs against a
+//! *canonical* corpus (the app's own fixtures / a real-world harvest — see the integration
+//! plan), not this dialect.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
