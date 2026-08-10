@@ -247,6 +247,49 @@ pub fn auth_to_rq(auth: &Auth) -> AuthMap {
         }
         Auth::OAuth1 { params } => auth_oauth1(params),
         Auth::OAuth2 { params, .. } => auth_oauth2(params),
+        Auth::AwsSigV4 { params } => {
+            let g = |k: &str| params.get(k).cloned().unwrap_or_default();
+            let mut m = serde_json::Map::new();
+            m.insert("type".into(), json!("aws_sigv4"));
+            m.insert("signatureVersion".into(), json!("v4"));
+            m.insert("accessKeyId".into(), json!(g("accessKey")));
+            m.insert("secretAccessKey".into(), json!(g("secretKey")));
+            m.insert("sessionToken".into(), json!(g("sessionToken")));
+            m.insert("region".into(), json!(g("region")));
+            m.insert("service".into(), json!(g("service")));
+            m.insert("profileName".into(), json!(""));
+            // `addAuthDataToQuery` → presigned-URL mode (expiry backfilled to the schema default).
+            if params
+                .get("addAuthDataToQuery")
+                .map(|v| v == "true")
+                .unwrap_or(false)
+            {
+                m.insert("attachment".into(), json!("presigned_url"));
+                m.insert("expirySeconds".into(), json!(3600));
+            } else {
+                m.insert("attachment".into(), json!("live_request"));
+            }
+            AuthMap::Mapped(Value::Object(m))
+        }
+        Auth::Ntlm { params } => {
+            let g = |k: &str| params.get(k).cloned().unwrap_or_default();
+            AuthMap::Mapped(json!({
+                "type": "ntlm",
+                "username": g("username"), "password": g("password"),
+                "domain": g("domain"), "workstation": g("workstation"),
+            }))
+        }
+        Auth::Hawk { params } => {
+            let g = |k: &str| params.get(k).cloned().unwrap_or_default();
+            AuthMap::Mapped(json!({
+                "type": "hawk",
+                "authId": g("authId"), "authKey": g("authKey"),
+                "algorithm": canon_enum(&g("algorithm"), &["sha1", "sha256"], "sha256"),
+                "user": g("user"), "nonce": g("nonce"), "timestamp": g("timestamp"),
+                "ext": g("extraData"), "app": g("app"), "dlg": g("dlg"),
+                "includePayloadHash": params.get("includePayloadHash").map(|v| v == "true").unwrap_or(false),
+            }))
+        }
         other => AuthMap::Unsupported(format!("{other:?}")),
     }
 }

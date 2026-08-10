@@ -37,41 +37,28 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
     let mut used: HashSet<String> = HashSet::new();
     let mut items: Vec<Item> = Vec::new();
 
-    // Folders → sub-collections. Order folders by `folders_order` when present.
-    let folders: Vec<&Value> = match root.get("folders") {
-        Some(Value::Array(fs)) => order_by(fs, root.get("folders_order")),
-        _ => Vec::new(),
-    };
-    for (fi, folder) in folders.iter().enumerate() {
-        let fname = shared::obj_str(folder, "name").unwrap_or_else(|| "folder".to_string());
-        let floc = format!("folders[{fi}]");
-        // Unique fallback id from position (duplicate folder names must not collide).
-        let fid = shared::obj_str(folder, "id")
-            .unwrap_or_else(|| format!("pm-{}", shared::slugify(&floc)));
-        let mut fitems = Vec::new();
-        for id in id_order(folder.get("order")) {
-            if let Some(req) = by_id.get(&id) {
-                used.insert(id.clone());
-                fitems.push(Item::Request(Box::new(v1_request(
-                    req,
-                    report,
-                    &format!("{floc}.{id}"),
-                ))));
+    // folder id → folder Value, for tree reconstruction.
+    let mut folders_by_id: BTreeMap<String, &Value> = BTreeMap::new();
+    if let Some(Value::Array(fs)) = root.get("folders") {
+        for f in fs {
+            if let Some(id) = shared::obj_str(f, "id") {
+                folders_by_id.insert(id, f);
             }
         }
-        items.push(Item::Collection(Box::new(Collection {
-            meta: shared::record_meta(fid, fname, &floc, shared::obj_str(folder, "description")),
-            auth: None,
-            headers: Vec::new(),
-            scripts: Scripts::default(),
-            variables: Vec::new(),
-            items: fitems,
-        })));
+    }
+    // Requests that live inside some folder (so they're not also placed at the root).
+    let mut reqs_in_folders: HashSet<String> = HashSet::new();
+    if let Some(Value::Array(fs)) = root.get("folders") {
+        for f in fs {
+            for id in id_order(f.get("order")) {
+                reqs_in_folders.insert(id);
+            }
+        }
     }
 
-    // Top-level `order[]` → requests directly under the collection.
+    // Top-level requests first (`order`, excluding those inside folders) — matches the app.
     for id in id_order(root.get("order")) {
-        if used.contains(&id) {
+        if reqs_in_folders.contains(&id) || used.contains(&id) {
             continue;
         }
         if let Some(req) = by_id.get(&id) {
@@ -80,6 +67,33 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
                 req,
                 report,
                 &format!("order.{id}"),
+            ))));
+        }
+    }
+    // Then top-level folders (`folders_order`, else every folder) — reconstructed recursively.
+    let top_folder_ids: Vec<String> = match root.get("folders_order") {
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        _ => root
+            .get("folders")
+            .and_then(Value::as_array)
+            .map(|fs| fs.iter().filter_map(|f| shared::obj_str(f, "id")).collect())
+            .unwrap_or_default(),
+    };
+    for fid in &top_folder_ids {
+        if let Some(f) = folders_by_id.get(fid) {
+            let mut visited = HashSet::new();
+            visited.insert(fid.clone());
+            items.push(Item::Collection(Box::new(build_v1_folder(
+                f,
+                &format!("folder.{fid}"),
+                &by_id,
+                &folders_by_id,
+                &mut used,
+                report,
+                visited,
             ))));
         }
     }
@@ -106,10 +120,10 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
             "",
             shared::obj_str(root, "description"),
         ),
-        auth: None,
+        auth: super::v2_1::parse_auth(root.get("auth"), report, "auth"),
         headers: Vec::new(),
-        scripts: Scripts::default(),
-        variables: Vec::new(),
+        scripts: shared::parse_scripts(shared::field(root, "event", "events")),
+        variables: shared::parse_variables(root.get("variables")),
         items,
     };
 
@@ -122,34 +136,64 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
     }
 }
 
-/// Order elements of `arr` (folder objects) by an `ids` list of their `id`s, appending any
-/// not listed. Falls back to array order when `ids` is absent.
-fn order_by<'a>(arr: &'a [Value], ids: Option<&Value>) -> Vec<&'a Value> {
-    let order = id_order(ids);
-    if order.is_empty() {
-        return arr.iter().collect();
-    }
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    for id in &order {
-        if let Some(el) = arr
-            .iter()
-            .find(|e| shared::obj_str(e, "id").as_deref() == Some(id))
-        {
-            out.push(el);
-            seen.insert(id.clone());
+/// Reconstruct a v1 folder (and its subtree) → IR [`Collection`]. Children are its requests
+/// (`order`) followed by its sub-folders (`folders_order`), recursively — matching the app's
+/// `buildFolderNode`. `visited` guards against a cyclic `folders_order` graph.
+#[allow(clippy::too_many_arguments)]
+fn build_v1_folder<'a>(
+    folder: &'a Value,
+    floc: &str,
+    by_id: &BTreeMap<String, &'a Value>,
+    folders_by_id: &BTreeMap<String, &'a Value>,
+    used: &mut HashSet<String>,
+    report: &mut Report,
+    visited: HashSet<String>,
+) -> Collection {
+    let fname = shared::obj_str(folder, "name").unwrap_or_else(|| "folder".to_string());
+    let fid =
+        shared::obj_str(folder, "id").unwrap_or_else(|| format!("pm-{}", shared::slugify(floc)));
+
+    let mut children = Vec::new();
+    // Requests first.
+    for id in id_order(folder.get("order")) {
+        if let Some(req) = by_id.get(&id) {
+            used.insert(id.clone());
+            children.push(Item::Request(Box::new(v1_request(
+                req,
+                report,
+                &format!("{floc}.{id}"),
+            ))));
         }
     }
-    for el in arr {
-        if let Some(id) = shared::obj_str(el, "id") {
-            if !seen.contains(&id) {
-                out.push(el);
-            }
-        } else {
-            out.push(el);
+    // Then sub-folders (cycle-guarded).
+    for sub in id_order(folder.get("folders_order")) {
+        if visited.contains(&sub) {
+            continue;
+        }
+        if let Some(sf) = folders_by_id.get(&sub) {
+            let mut v = visited.clone();
+            v.insert(sub.clone());
+            children.push(Item::Collection(Box::new(build_v1_folder(
+                sf,
+                &format!("{floc}.{sub}"),
+                by_id,
+                folders_by_id,
+                used,
+                report,
+                v,
+            ))));
         }
     }
-    out
+
+    Collection {
+        meta: shared::record_meta(fid, fname, floc, shared::description(folder)),
+        // v1 folders carry a v2.1-style `auth` object when set.
+        auth: super::v2_1::parse_auth(folder.get("auth"), report, &format!("{floc}.auth")),
+        headers: Vec::new(),
+        scripts: shared::parse_scripts(shared::field(folder, "event", "events")),
+        variables: shared::parse_variables(folder.get("variables")),
+        items: children,
+    }
 }
 
 /// Read an `order`-style array of id strings.
@@ -194,6 +238,10 @@ fn v1_request(req: &Value, report: &mut Report, locator: &str) -> Request {
     }
 
     let id = shared::obj_str(req, "id").unwrap_or_else(|| format!("pm-{}", shared::slugify(&name)));
+    // v1 requests carry a v2.1-style `auth` object (type + `<type>[]` params) when set; an
+    // absent one means inherit (the app's `mapAuth(undefined)`). currentHelper/helperAttributes
+    // are the legacy UI mirror and are NOT the auth source — matching the app.
+    let auth = super::v2_1::parse_auth(req.get("auth"), report, &format!("{locator}.auth"));
     let http = HttpRequest {
         method,
         url,
@@ -211,7 +259,7 @@ fn v1_request(req: &Value, report: &mut Report, locator: &str) -> Request {
         },
         locator,
         http,
-        None,
+        auth,
         scripts,
     )
 }
@@ -237,6 +285,11 @@ fn v1_body(req: &Value, _report: &mut Report, _locator: &str) -> Option<Body> {
             }
         }
         "urlencoded" | "params" => {
+            // The app requires `data` to be an array; a null/absent `data` means no body
+            // (an empty array is still a body — form/multipart with no rows).
+            let Some(Value::Array(_)) = req.get("data") else {
+                return None;
+            };
             let fields = v1_data_kv(req.get("data"));
             if mode == "params" {
                 Some(Body::FormData {
