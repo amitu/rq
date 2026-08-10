@@ -610,6 +610,10 @@ fn build_tree(files: &BTreeMap<String, String>, dir: &str, report: &mut Report) 
         if rel.is_empty() || (dir.is_empty() && rel.starts_with("environments/")) {
             continue;
         }
+        // Hidden dirs/files (.git, .cross-q, …) are never part of a Bruno collection.
+        if rel.starts_with('.') {
+            continue;
+        }
         match rel.split_once('/') {
             // A nested directory: recurse once per unique child dir that has a folder.bru.
             Some((child, _)) => {
@@ -994,6 +998,28 @@ mod tests {
             vec!["First", "Second"],
             "requests ordered by meta.seq"
         );
+    }
+
+    #[test]
+    fn directory_skips_hidden_dirs() {
+        // A `.cross-q` report dir (or `.git`) in the tree must not become a folder.
+        let files = &[
+            ("bruno.json", r#"{"name":"C","type":"collection"}"#),
+            (".cross-q/report.json", r#"{"fidelity":"lossless"}"#),
+            (".git/config", "[core]"),
+            (
+                "ping.bru",
+                "meta {\n  name: Ping\n  type: http\n}\nget {\n  url: https://x.test/ping\n}\n",
+            ),
+        ];
+        let ws = parse_dir(files);
+        let root = &ws.collections[0];
+        assert_eq!(
+            root.items.len(),
+            1,
+            "only the request should be present, no hidden folders"
+        );
+        assert!(matches!(&root.items[0], Item::Request(r) if r.meta.name == "Ping"));
     }
 
     #[test]
