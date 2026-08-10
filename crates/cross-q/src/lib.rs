@@ -6,6 +6,7 @@
 //! parse → map → emit shape.
 
 pub mod curl;
+pub mod emit_postman;
 pub mod emit_rq;
 pub mod mappeditems;
 pub mod postman;
@@ -125,6 +126,15 @@ pub fn parse_to_mapped_items(format: &str, content: &str, _file_name: &str) -> s
             "error": e.to_string(),
         }),
     }
+}
+
+/// Parse Postman `content` and re-emit it as a Postman v2.1 collection — the reverse
+/// round-trip used to detect any field we silently drop (`Postman → IR → Postman`). The
+/// conversion report is discarded here; callers diff the returned JSON against the original.
+pub fn postman_roundtrip(content: &str) -> Result<serde_json::Value, String> {
+    let mut report = Report::new(Fidelity::Lossless);
+    let ws = postman::parse_postman(content, &mut report)?;
+    Ok(emit_postman::to_postman(&ws))
 }
 
 #[cfg(test)]
