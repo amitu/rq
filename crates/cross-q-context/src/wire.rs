@@ -99,6 +99,17 @@ pub struct MutationDiff {
     pub variables: serde_json::Map<String, Value>,
 }
 
+/// A recorded change to the outgoing request's headers (`rq.request.headers.*`), applied before
+/// the request fires (`docs/CONTEXT.md` §2.4 / §6 `requestMutationDiff`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+pub enum HeaderMutation {
+    Add { key: String, value: String },
+    Upsert { key: String, value: String },
+    Remove { name: String },
+    Clear,
+}
+
 /// A chaining directive (`setNextRequest` / `skipRequest`) drained from the run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -115,6 +126,8 @@ pub struct ScriptExecutionResult {
     pub logs: Vec<LogEntry>,
     #[serde(rename = "testResults")]
     pub test_results: Vec<TestResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "requestMutationDiff")]
+    pub request_header_mutations: Vec<HeaderMutation>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "executionDirective")]
     pub execution_directive: Option<ExecutionDirective>,
     #[serde(skip_serializing_if = "Option::is_none")]

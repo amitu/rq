@@ -18,10 +18,12 @@
   var logs = [];
   var mut = { environment: {}, globals: {}, collection: {}, runtime: {} };
   var directive = { value: null };
+  var reqmut = []; // ordered request-header ops (§6 requestMutationDiff)
   globalThis.__rq_tests = tests;
   globalThis.__rq_logs = logs;
   globalThis.__rq_mut = mut;
   globalThis.__rq_directive = directive;
+  globalThis.__rq_reqmut = reqmut;
 
   // --- console capture ---
   function logAt(level) {
@@ -82,17 +84,93 @@
     return chain;
   }
 
-  // --- rq.request / rq.response (reads; mutation facade is a later port) ---
-  var request = ctx.request || {};
-  var response = phase === 'pre-request' ? null : buildResponse(ctx.response || {});
-  function buildResponse(r) {
+  // --- rq.request (§2.4) — a header facade whose mutations are recorded to be applied before
+  // the request fires (drained as requestMutationDiff). ---
+  function buildRequest(rw) {
+    var r = rw || {};
+    var headers = Array.isArray(r.headers) ? r.headers.map(function (h) { return { key: h.key, value: h.value }; }) : [];
+    function idx(name) {
+      var l = String(name).toLowerCase();
+      for (var i = 0; i < headers.length; i++) { if (String(headers[i].key).toLowerCase() === l) return i; }
+      return -1;
+    }
+    var facade = {
+      add: function (h) { headers.push({ key: h.key, value: h.value }); reqmut.push({ op: 'add', key: h.key, value: h.value }); },
+      upsert: function (h) { var i = idx(h.key); if (i >= 0) headers[i] = { key: h.key, value: h.value }; else headers.push({ key: h.key, value: h.value }); reqmut.push({ op: 'upsert', key: h.key, value: h.value }); },
+      remove: function (name) { var i = idx(name); if (i >= 0) headers.splice(i, 1); reqmut.push({ op: 'remove', name: name }); },
+      clear: function () { headers = []; reqmut.push({ op: 'clear' }); },
+      has: function (name) { return idx(name) >= 0; },
+      get: function (name) { var i = idx(name); return i >= 0 ? headers[i].value : undefined; },
+      all: function () { return headers.slice(); },
+    };
     return {
-      status: r.status, code: r.status, statusText: r.statusText, headers: r.headers || {},
-      body: r.body, time: r.time, responseTime: r.time,
-      text: function () { return typeof r.body === 'string' ? r.body : JSON.stringify(r.body); },
-      json: function () { return typeof r.body === 'string' ? JSON.parse(r.body) : r.body; },
+      url: r.url, method: r.method, body: r.body, queryParams: r.queryParams, headers: facade,
+      addHeader: function (h) { facade.add(h); },
+      upsertHeader: function (h) { facade.upsert(h); },
+      removeHeader: function (n) { facade.remove(n); },
+      toJSON: function () { return { url: r.url, method: r.method, headers: headers.slice(), body: r.body }; },
     };
   }
+
+  // --- rq.response (§2.5) — reads + the `.to.be.*` / `.to.have.*` assertion tree (throws on
+  // mismatch; negatable via `.to.not`). ---
+  function buildResponse(r) {
+    function headerGet(name) {
+      var hs = r.headers || {}, l = String(name).toLowerCase();
+      for (var k in hs) { if (k.toLowerCase() === l) return hs[k]; }
+      return undefined;
+    }
+    function bodyText() { return typeof r.body === 'string' ? r.body : JSON.stringify(r.body); }
+    function bodyJson() { return typeof r.body === 'string' ? JSON.parse(r.body) : r.body; }
+    function assertion(neg) {
+      function check(cond, msg) { if (neg ? cond : !cond) throw new Error(msg); }
+      var status = r.status;
+      var be = {};
+      function cls(name, test) { Object.defineProperty(be, name, { get: function () { check(test(status), 'expected status ' + status + (neg ? ' not' : '') + ' to be ' + name); return be; } }); }
+      cls('ok', function (s) { return s >= 200 && s < 300; });
+      cls('success', function (s) { return s >= 200 && s < 300; });
+      cls('accepted', function (s) { return s === 202; });
+      cls('info', function (s) { return s >= 100 && s < 200; });
+      cls('redirection', function (s) { return s >= 300 && s < 400; });
+      cls('clientError', function (s) { return s >= 400 && s < 500; });
+      cls('badRequest', function (s) { return s === 400; });
+      cls('unauthorized', function (s) { return s === 401; });
+      cls('forbidden', function (s) { return s === 403; });
+      cls('notFound', function (s) { return s === 404; });
+      cls('rateLimited', function (s) { return s === 429; });
+      cls('serverError', function (s) { return s >= 500 && s < 600; });
+      cls('error', function (s) { return s >= 400 && s < 600; });
+      var have = {
+        status: function (v) { if (typeof v === 'string') check(r.statusText === v, 'expected statusText ' + v); else check(status === v, 'expected status ' + v + ' got ' + status); return have; },
+        header: function (name) { check(headerGet(name) !== undefined, 'expected header ' + name); return have; },
+        body: function (expected) { check(bodyText() === expected, 'expected body equality'); return have; },
+        jsonBody: function (path, value) {
+          var j; try { j = bodyJson(); } catch (e) { check(false, 'expected a JSON body'); return have; }
+          if (arguments.length === 0) { check(j != null, 'expected a JSON body'); return have; }
+          var cur = j, parts = String(path).split('.');
+          for (var i = 0; i < parts.length; i++) { cur = cur == null ? undefined : cur[parts[i]]; }
+          if (arguments.length >= 2) check(JSON.stringify(cur) === JSON.stringify(value), 'expected jsonBody ' + path + ' to equal');
+          else check(cur !== undefined, 'expected jsonBody ' + path);
+          return have;
+        },
+      };
+      var root = {};
+      Object.defineProperty(root, 'be', { get: function () { return be; } });
+      Object.defineProperty(root, 'have', { get: function () { return have; } });
+      Object.defineProperty(root, 'not', { get: function () { return assertion(!neg); } });
+      return root;
+    }
+    return {
+      status: r.status, code: r.status, statusText: r.statusText, headers: r.headers || {},
+      body: r.body, time: r.time, responseTime: r.time, size: r.size,
+      text: function () { return bodyText(); },
+      json: function () { return bodyJson(); },
+      get to() { return assertion(false); },
+    };
+  }
+
+  var request = buildRequest(ctx.request);
+  var response = phase === 'pre-request' ? null : buildResponse(ctx.response || {});
 
   // --- the rq namespace ---
   var rq = {

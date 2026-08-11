@@ -15,8 +15,8 @@
 mod wire;
 
 pub use wire::{
-    ExecutionDirective, LogEntry, Mode, MutationDiff, Phase, ScriptContext, ScriptExecutionInput,
-    ScriptExecutionResult, TestResult, TestStatus,
+    ExecutionDirective, HeaderMutation, LogEntry, Mode, MutationDiff, Phase, ScriptContext,
+    ScriptExecutionInput, ScriptExecutionResult, TestResult, TestStatus,
 };
 
 use rquickjs::{CatchResultExt, Context, Runtime};
@@ -88,9 +88,15 @@ fn run(input: &ScriptExecutionInput) -> Result<ScriptExecutionResult, String> {
             .catch(&ctx)
             .map_err(|e| format!("rq shim install failed: {e}"))?;
 
-        // Run the user script. A thrown exception is captured as the result's `error`, not a
-        // hard failure — the wire contract still returns the tests/logs/mutations up to the throw.
-        if let Err(err) = ctx.eval::<rquickjs::Value, _>(input.script.as_bytes()).catch(&ctx) {
+        // Run the user script wrapped in an async IIFE so `await` works (§5), with an in-guest
+        // try/catch that captures both sync and awaited-rejection errors on `__rq_err`. A parse
+        // error of the wrapper itself surfaces as the eval `Err` below. Either way it becomes the
+        // result's `error`, not a hard failure — tests/logs/mutations up to the throw still return.
+        let wrapped = format!(
+            "globalThis.__rq_err = null; (async () => {{ try {{\n{}\n}} catch (e) {{ globalThis.__rq_err = String((e && e.message) || e); }} }})();",
+            input.script
+        );
+        if let Err(err) = ctx.eval::<rquickjs::Value, _>(wrapped).catch(&ctx) {
             result.error = Some(err.to_string());
         }
 
@@ -106,7 +112,7 @@ fn run(input: &ScriptExecutionInput) -> Result<ScriptExecutionResult, String> {
     let drained: String = context
         .with(|ctx| -> Result<String, String> {
             ctx.eval::<String, _>(
-                "JSON.stringify({ tests: __rq_tests, logs: __rq_logs, mut: __rq_mut, directive: __rq_directive.value })",
+                "JSON.stringify({ tests: __rq_tests, logs: __rq_logs, mut: __rq_mut, reqmut: __rq_reqmut, directive: __rq_directive.value, err: globalThis.__rq_err })",
             )
             .catch(&ctx)
             .map_err(|e| e.to_string())
@@ -137,9 +143,19 @@ fn apply_drain(drained: &str, result: &mut ScriptExecutionResult) -> Result<(), 
             variables: take("runtime"),
         };
     }
+    if let Some(reqmut) = v.get("reqmut") {
+        result.request_header_mutations = serde_json::from_value(reqmut.clone()).unwrap_or_default();
+    }
     if let Some(dir) = v.get("directive") {
         if !dir.is_null() {
             result.execution_directive = serde_json::from_value(dir.clone()).ok();
+        }
+    }
+    // An in-guest error (sync throw or awaited rejection) wins over an empty result but not over a
+    // harness/parse error already set.
+    if result.error.is_none() {
+        if let Some(err) = v.get("err").and_then(Value::as_str) {
+            result.error = Some(err.to_string());
         }
     }
     Ok(())
@@ -246,5 +262,62 @@ mod tests {
         assert!(matches!(ok.execution_directive, Some(ExecutionDirective::SkipRequest)));
         let bad = execute(&input("rq.execution.skipRequest();", Phase::PostResponse));
         assert!(bad.error.as_deref().unwrap_or("").contains("pre-request"));
+    }
+
+    #[test]
+    fn response_assertion_tree() {
+        let mut inp = input(
+            r#"
+              rq.test("ok", function () { rq.response.to.be.ok; });
+              rq.test("status", function () { rq.response.to.have.status(200); });
+              rq.test("not error", function () { rq.response.to.not.be.error; });
+              rq.test("json path", function () { rq.response.to.have.jsonBody("a.b", 1); });
+              rq.test("fails notFound", function () { rq.response.to.be.notFound; });
+            "#,
+            Phase::PostResponse,
+        );
+        inp.context.response = serde_json::json!({ "status": 200, "body": "{\"a\":{\"b\":1}}" });
+        let r = execute(&inp);
+        assert!(r.error.is_none(), "{:?}", r.error);
+        let status = |n: &str| r.test_results.iter().find(|t| t.name == n).unwrap().status;
+        assert_eq!(status("ok"), TestStatus::Passed);
+        assert_eq!(status("status"), TestStatus::Passed);
+        assert_eq!(status("not error"), TestStatus::Passed);
+        assert_eq!(status("json path"), TestStatus::Passed);
+        assert_eq!(status("fails notFound"), TestStatus::Failed);
+    }
+
+    #[test]
+    fn request_header_facade_records_mutations() {
+        let mut inp = input(
+            r#"
+              rq.request.headers.upsert({ key: "Authorization", value: "Bearer x" });
+              rq.request.addHeader({ key: "X-Trace", value: "1" });
+              rq.request.removeHeader("Cookie");
+            "#,
+            Phase::PreRequest,
+        );
+        inp.context.request =
+            serde_json::json!({ "url": "https://x.test", "method": "GET", "headers": [{ "key": "Cookie", "value": "a=b" }] });
+        let r = execute(&inp);
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert_eq!(r.request_header_mutations.len(), 3);
+        assert!(matches!(&r.request_header_mutations[0], HeaderMutation::Upsert { key, .. } if key == "Authorization"));
+        assert!(matches!(&r.request_header_mutations[2], HeaderMutation::Remove { name } if name == "Cookie"));
+    }
+
+    #[test]
+    fn async_await_is_supported() {
+        let r = execute(&input(
+            r#"
+              const v = await Promise.resolve("hi");
+              rq.environment.set("k", v);
+              rq.test("awaited", function () { rq.expect(rq.environment.get("k")).to.equal("hi"); });
+            "#,
+            Phase::PreRequest,
+        ));
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert_eq!(r.test_results[0].status, TestStatus::Passed);
+        assert_eq!(r.mutation_diff.environment.get("k"), Some(&Value::String("hi".into())));
     }
 }

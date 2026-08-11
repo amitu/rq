@@ -17,6 +17,12 @@ clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 tempfile = "3"
 
+# Optimize WASM/release builds for size (the npm/PyPI artifacts). Workspace-root so it applies
+# to every member (Cargo ignores `[profile]` in non-root manifests).
+[profile.release]
+opt-level = "s"
+lto = true
+
 # Lints applied across every crate in the workspace.
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
