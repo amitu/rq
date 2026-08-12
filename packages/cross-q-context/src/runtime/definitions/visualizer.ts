@@ -1,0 +1,126 @@
+/**
+ * `rq.visualizer` — sandbox scripting surface for the response visualizer
+ * (ADR-202, Postman `pm.visualizer` parity).
+ *
+ * The namespace is a pure collector, modelled on `createExecutionNamespace` +
+ * `ExecutionDirectiveCollector` (execution.ts): `set(template, data)` compiles
+ * the Handlebars template EAGERLY against a JSON snapshot of `data` and writes a
+ * single discriminated `VisualizerDirective` onto an injected collector, which the
+ * engine drains after the script settles. `set()` overwrites the slot (FR-03
+ * "last call wins" is free); `clear()` writes a `{ kind: 'cleared' }` marker so a
+ * later phase's clear overrides an earlier `set()` (FR-18c) — the runtime strips the
+ * marker at the entry lift, disabling the Visualize action (FR-16).
+ *
+ * Two in-guest guards keep every non-JSON / bad-template outcome contained so it
+ * never aborts the post-response script (ADR-202 Decision 1 / Decision 3, FR-10):
+ * a `JSON.stringify` throw (circular reference / BigInt) and a Handlebars compile
+ * or render throw are both caught and recorded as `{ kind: 'error', message }`.
+ *
+ * Phase gating (ADR-202): the visualizer is post-response-only. It is also in
+ * `PHASE_RESTRICTED`, so the engines make it genuinely absent in the pre-request
+ * phase; this factory is additionally phase-guarded so that, if constructed
+ * outside post-response, `set`/`clear` no-op and emit a console warning rather
+ * than compiling or collecting anything.
+ *
+ * The factory takes its dependencies as parameters — no `declare const`, no
+ * globals — so it stays platform-agnostic and unit-testable.
+ */
+
+import type { JsonValue } from '@requestly/shared-types/common';
+import type { VisualizerDirective } from '@requestly/shared-types/runtime';
+
+/** Sink the visualizer namespace records its compiled/error output — or a `clear()` marker — onto (ADR-202). Mirrors ExecutionDirectiveCollector. */
+export interface VisualizerCollector {
+  output?: VisualizerDirective;
+}
+
+/** Minimal Handlebars surface the visualizer needs (compile → render). Satisfied by the vendor IIFE. */
+export interface VisualizerLibs {
+  handlebars: { compile: (template: string) => (context?: unknown) => string };
+}
+
+export interface RqVisualizerNamespace {
+  /** Set the response visualization from a Handlebars template + optional data (Postman parity). */
+  set(template: string, data?: JsonValue): void;
+  /** Clear the current visualization — returns the Visualize action to disabled (FR-16). */
+  clear(): void;
+}
+
+/**
+ * The single JS-in-HTML global the compiled `html` embeds the data snapshot on
+ * (ADR-202 FR-04c). The render surface's `pm.getData`/`rq.getData` shims read it
+ * (RQ-4996 / ADR-203). Kept as a named constant so both engines embed the same key.
+ */
+export const VISUALIZER_DATA_GLOBAL = '__rq_viz_data__';
+
+// Bounded, static error messages (gr-static-error-messages). The two FR-10 error
+// sources — a non-serializable `data` value and a Handlebars compile/render
+// failure — each map to exactly one message.
+const NON_SERIALIZABLE_MESSAGE = 'rq.visualizer.set() was called with data that could not be serialized to JSON.';
+const TEMPLATE_COMPILE_MESSAGE = 'rq.visualizer.set() was called with a template that could not be compiled.';
+
+/**
+ * Serialize `data` to a JSON snapshot, embed it into the compiled HTML as
+ * `window.__rq_viz_data__`, and JSON-escape `<` so a string value containing
+ * `</script>` cannot break out of the embed (standard JSON-in-HTML hardening).
+ */
+function embedDataScript(dataJson: string): string {
+  const escaped = dataJson.replace(/</g, '\\u003c');
+  return `<script>window.${VISUALIZER_DATA_GLOBAL} = ${escaped};</script>\n`;
+}
+
+/**
+ * Builds `rq.visualizer` (ADR-202; pre-request support added 2026-08-02, ADR-202
+ * "Amendment (2026-08-02)" / TB FR-18). Available in BOTH the pre-request and
+ * post-response phases (Postman parity — `pm.visualizer.set()` is callable in both).
+ * `set()` snapshots `data`, compiles the template eagerly and records a `compiled` /
+ * `error` output; `clear()` empties the slot. The pre-request and post-response
+ * outputs feed a single per-entry slot, last-writer-wins — the runtime lifts both
+ * (`modules/runtime/src/core/execute.ts`).
+ */
+export function createVisualizer(collector: VisualizerCollector, libs: VisualizerLibs): RqVisualizerNamespace {
+  return {
+    set(template: string, data?: JsonValue): void {
+      // 1. JSON-snapshot `data` at set() time, guarded (ADR-202 Decision 1). A
+      // throw (circular reference / BigInt) records an error instead of aborting
+      // the script. A bare top-level function makes JSON.stringify return
+      // `undefined` (no throw) — normalize to `null` so the embed + parse stay valid.
+      let dataJson: string;
+      try {
+        const stringified = JSON.stringify(data ?? null);
+        dataJson = stringified === undefined ? 'null' : stringified;
+      } catch {
+        collector.output = { kind: 'error', message: NON_SERIALIZABLE_MESSAGE };
+        return;
+      }
+
+      // The single snapshot: a plain JsonValue parsed back from the string we just
+      // produced (double-carry — embedded into `html` AND carried on `.data`). Typed
+      // via the annotation (not an assertion) — JSON.parse of our own JSON.stringify
+      // output is a JsonValue by construction (parse-at-boundary snapshot, ADR-034).
+      const snapshot: JsonValue = JSON.parse(dataJson);
+
+      // 2. Compile + render eagerly, guarded (FR-10). A Handlebars syntax error is
+      // caught synchronously here and stored as an error output, never deferred.
+      let html: string;
+      try {
+        const rendered = libs.handlebars.compile(template)(snapshot);
+        html = embedDataScript(dataJson) + rendered;
+      } catch {
+        collector.output = { kind: 'error', message: TEMPLATE_COMPILE_MESSAGE };
+        return;
+      }
+
+      // 3. Overwrite the slot (FR-03 last-writer-wins is free).
+      collector.output = { kind: 'compiled', html, data: snapshot };
+    },
+
+    clear(): void {
+      // Record an explicit-clear marker (NOT `undefined`). `undefined` means "this
+      // script never touched the visualizer" and must not override an earlier phase;
+      // `clear()` MUST override (FR-18c), so it needs a value the merge can see. The
+      // runtime strips this marker at the entry lift → no visualization (FR-16).
+      collector.output = { kind: 'cleared' };
+    },
+  };
+}
