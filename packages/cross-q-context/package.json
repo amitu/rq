@@ -16,6 +16,10 @@
     ".": {
       "types": "./src/index.d.ts",
       "default": "./src/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "default": "./dist/runtime/index.js"
     }
   },
   "imports": {
@@ -27,11 +31,16 @@
   },
   "files": [
     "src",
+    "dist",
     "engine",
     "engine-node"
   ],
   "scripts": {
     "build:wasm": "wasm-pack build ../../crates/cq-transform --target bundler --out-dir ../../packages/cross-q-context/engine --out-name cross_q_context && wasm-pack build ../../crates/cq-transform --target nodejs --out-dir ../../packages/cross-q-context/engine-node --out-name cross_q_context",
+    "build:runtime": "tsc",
     "test": "node test/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
   }
 }
