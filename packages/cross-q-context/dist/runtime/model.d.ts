@@ -60,16 +60,16 @@ export type ParsedKeyValue = KeyValue;
 export interface FormDataKeyValue {
     key: string;
     value: string;
-    type: 'text' | 'file';
+    type: string;
 }
 export interface PathVariable {
     key: string;
     value: string;
 }
 export interface HttpBody {
-    contentType: RequestContentType;
+    contentType: string;
     raw?: string;
-    rawContentType?: RawBodyContentType;
+    rawContentType?: string;
     formUrlEncoded: KeyValue[];
     formData: FormDataKeyValue[];
     binary?: {
@@ -79,12 +79,12 @@ export interface HttpBody {
 }
 export interface HttpRequest {
     url: string;
-    method: RequestMethod;
+    method: string;
     headers: KeyValue[];
     queryParams: KeyValue[];
     pathVariables: PathVariable[];
     body: HttpBody;
-    contentType: RequestContentType;
+    contentType: string;
     auth?: Json;
 }
 export type ParsedHttpRequest = HttpRequest;
@@ -95,8 +95,8 @@ export interface HttpResponse {
     body: string;
     time: number;
     size: number;
-    /** Body byte encoding (ADR-153); absent ⇒ 'utf8'. */
-    bodyEncoding?: 'utf8' | 'base64';
+    /** Body byte encoding (ADR-153); absent ⇒ 'utf8'. `string` for seam compatibility. */
+    bodyEncoding?: string;
 }
 export interface GraphQLBody {
     query: string;
@@ -105,7 +105,7 @@ export interface GraphQLBody {
 }
 export interface GraphQLRequest {
     url: string;
-    method: RequestMethod;
+    method: string;
     headers: KeyValue[];
     queryParams: KeyValue[];
     body: GraphQLBody;
