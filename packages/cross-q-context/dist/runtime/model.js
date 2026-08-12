@@ -1,12 +1,12 @@
 // cross-q-context — the request/response DATA MODEL the rq.* API reads (self-contained).
 //
-// A clean-room model of the API-client request/response the script sees via `rq.request` /
-// `rq.response`. Requestly's app derives the equivalent from `@requestly/schemas` (zod-inferred);
-// cross-q-context defines it here with ZERO app dependency, matching the app's field shapes so the
-// rq.* API and the app's mapping layer line up at the seam. Deep auth is carried opaquely (`Json`)
-// for now — the script rarely reshapes it, and the app maps its rich auth onto it at the boundary.
-// Realtime protocols (MQTT / WebSocket / Socket.IO) are deferred until the rq.* API needs them.
-/** The protocol of an entry. */
+// A clean-room model of the API-client request/response a script sees via `rq.request` /
+// `rq.response`, plus the variable + realtime-message shapes. Requestly's app derives the
+// equivalent from `@requestly/schemas` (zod-inferred); cross-q-context defines it here with ZERO
+// app dependency, matching the app's field shapes so the rq.* API and the app's mapping layer line
+// up at the seam. Deep auth is carried opaquely (`Json`). Realtime CONNECT/PUBLISH request shapes
+// (MQTT/WS/Socket.IO) are deferred; the on-message + gRPC-stream response shapes are here.
+// ── protocol enums ──────────────────────────────────────────────────────────────────────────
 export var EntryType;
 (function (EntryType) {
     EntryType["http"] = "http";
@@ -26,7 +26,6 @@ export var RequestMethod;
     RequestMethod["HEAD"] = "HEAD";
     RequestMethod["OPTIONS"] = "OPTIONS";
 })(RequestMethod || (RequestMethod = {}));
-/** Top-level body content-type selector Requestly stores on a request. */
 export var RequestContentType;
 (function (RequestContentType) {
     RequestContentType["raw"] = "raw";
@@ -36,7 +35,6 @@ export var RequestContentType;
     RequestContentType["binary"] = "binary";
     RequestContentType["none"] = "none";
 })(RequestContentType || (RequestContentType = {}));
-/** The editor language of a `raw` body — doubles as its Content-Type. */
 export var RawBodyContentType;
 (function (RawBodyContentType) {
     RawBodyContentType["text"] = "text/plain";

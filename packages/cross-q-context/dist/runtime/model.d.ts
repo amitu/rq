@@ -1,5 +1,4 @@
 import type { Json } from './contract.js';
-/** The protocol of an entry. */
 export declare enum EntryType {
     http = "http",
     graphql = "graphql",
@@ -17,7 +16,6 @@ export declare enum RequestMethod {
     HEAD = "HEAD",
     OPTIONS = "OPTIONS"
 }
-/** Top-level body content-type selector Requestly stores on a request. */
 export declare enum RequestContentType {
     raw = "raw",
     json = "json",
@@ -26,7 +24,6 @@ export declare enum RequestContentType {
     binary = "binary",
     none = "none"
 }
-/** The editor language of a `raw` body — doubles as its Content-Type. */
 export declare enum RawBodyContentType {
     text = "text/plain",
     json = "application/json",
@@ -58,33 +55,28 @@ export interface KeyValue {
     key: string;
     value: string;
 }
-/** A form-data pair, which additionally carries whether the value is a text field or a file. */
+/** Alias matching the app's boundary name. */
+export type ParsedKeyValue = KeyValue;
 export interface FormDataKeyValue {
     key: string;
     value: string;
     type: 'text' | 'file';
 }
-/** A path variable (`:id`). */
 export interface PathVariable {
     key: string;
     value: string;
 }
-/** A request body at the runtime boundary. Array fields are always present (empty when unused). */
 export interface HttpBody {
     contentType: RequestContentType;
-    /** Present for a `raw` body. */
     raw?: string;
-    /** The editor language of a `raw` body. */
     rawContentType?: RawBodyContentType;
     formUrlEncoded: KeyValue[];
     formData: FormDataKeyValue[];
-    /** Reference to a binary body file, when `contentType === binary`. */
     binary?: {
         name: string;
         path: string;
     };
 }
-/** An HTTP request the script reads via `rq.request`. Auth is opaque here (see file header). */
 export interface HttpRequest {
     url: string;
     method: RequestMethod;
@@ -95,34 +87,75 @@ export interface HttpRequest {
     contentType: RequestContentType;
     auth?: Json;
 }
-/** An HTTP response the script reads via `rq.response`. */
+export type ParsedHttpRequest = HttpRequest;
 export interface HttpResponse {
     status: number;
     statusText: string;
     headers: Record<string, string>;
     body: string;
-    /** Round-trip time in milliseconds. */
     time: number;
+    size: number;
+    /** Body byte encoding (ADR-153); absent ⇒ 'utf8'. */
+    bodyEncoding?: 'utf8' | 'base64';
 }
-/** A gRPC request the script reads via `rq.request` on a gRPC entry. */
-export interface GrpcRequest {
+export interface GraphQLBody {
+    query: string;
+    variables?: string;
+    operationName?: string;
+}
+export interface GraphQLRequest {
     url: string;
-    service: string;
-    method: string;
-    methodType: GrpcMethodType;
-    metadata: KeyValue[];
-    message: Json;
+    method: RequestMethod;
+    headers: KeyValue[];
+    queryParams: KeyValue[];
+    body: GraphQLBody;
+    /** The operation query string (top-level for the script facade's `extractBody`). */
+    query: string;
     auth?: Json;
 }
-/** A single gRPC stream message. */
-export interface GrpcStreamMessage {
-    payload: Json;
-    metadata?: Record<string, string>;
-}
-/** A gRPC response the script reads via `rq.response`. */
-export interface GrpcResponse {
-    statusCode: number;
+export type ParsedGraphQLRequest = GraphQLRequest;
+export interface GraphQLResponse {
+    status: number;
     statusText: string;
-    metadata: Record<string, string>;
-    messages: GrpcStreamMessage[];
+    headers: Record<string, string>;
+    body: string;
+    time: number;
+    size: number;
 }
+export interface GrpcRequest {
+    url: string;
+    methodPath: string;
+    metadata: KeyValue[];
+    /** The serialized request message (JSON text). */
+    message: string;
+    auth?: Json;
+}
+export type ParsedGrpcRequest = GrpcRequest;
+export interface GrpcStreamMessage {
+    readonly data: string;
+    readonly timestamp: number;
+}
+export interface GrpcScriptResponse {
+    statusCode: number;
+    statusMessage: string;
+    metadata: Record<string, string>;
+    trailers: Record<string, string>;
+    messages: GrpcStreamMessage[];
+    responseTime: number;
+}
+export interface ScriptMessageInput {
+    readonly index: number;
+    readonly data: string;
+    readonly timestamp: number;
+}
+export type VariableDataType = 'string' | 'number' | 'boolean' | 'secret';
+/** A resolved variable at the runtime boundary (the app's `VariableData`). */
+export interface VariableData {
+    localValue: string;
+    syncValue: string;
+    type: VariableDataType;
+    id?: string;
+    isPersisted?: boolean;
+    isEnabled?: boolean;
+}
+export type EnvironmentVariables = Record<string, VariableData>;

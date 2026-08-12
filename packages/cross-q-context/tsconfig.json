@@ -12,5 +12,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "include": ["src/runtime/**/*"]
+  "include": ["src/runtime/**/*"],
+  "exclude": ["src/runtime/definitions/codegen", "src/runtime/**/__tests__/**", "src/runtime/**/*.test.ts"]
 }
