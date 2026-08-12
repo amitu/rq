@@ -1,0 +1,37 @@
+{
+  "name": "@requestly/cross-q-context",
+  "version": "0.1.0",
+  "description": "The cross-q-context runtime — transform and (soon) execute every API-client script dialect (Postman pm.*/postman.*, Bruno bru.*) against the rq.* API. WebAssembly core, strings in / typed objects out. This build ships the compat (transform) pillar.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amitu/rq.git",
+    "directory": "packages/cross-q-context"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "imports": {
+    "#engine": {
+      "requestly-cli-node": "./engine-node/cross_q_context.js",
+      "node": "./engine-node/cross_q_context.js",
+      "default": "./engine/cross_q_context.js"
+    }
+  },
+  "files": [
+    "src",
+    "engine",
+    "engine-node"
+  ],
+  "scripts": {
+    "build:wasm": "wasm-pack build ../../crates/cq-transform --target bundler --out-dir ../../packages/cross-q-context/engine --out-name cross_q_context && wasm-pack build ../../crates/cq-transform --target nodejs --out-dir ../../packages/cross-q-context/engine-node --out-name cross_q_context",
+    "test": "node test/smoke.mjs"
+  }
+}

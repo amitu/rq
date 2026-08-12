@@ -8,7 +8,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [lib]
-crate-type = ["rlib"]
+# rlib: consumed natively by cross-q-context. cdylib: wasm-pack build for @cross-q/context (npm).
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 oxc_parser = "0.60"

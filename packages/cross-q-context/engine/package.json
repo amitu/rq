@@ -1,0 +1,23 @@
+{
+  "name": "cq-transform",
+  "type": "module",
+  "description": "The compat pillar of cross-q-context: an OXC-based AST rewrite of platform script dialects (Postman pm.*/postman.*, and Bruno bru.*) to the rq.* API. Scope-aware, byte-offset splices — comments and formatting preserved.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/browserstack/rq"
+  },
+  "files": [
+    "cross_q_context_bg.wasm",
+    "cross_q_context.js",
+    "cross_q_context_bg.js",
+    "cross_q_context.d.ts"
+  ],
+  "main": "cross_q_context.js",
+  "types": "cross_q_context.d.ts",
+  "sideEffects": [
+    "./cross_q_context.js",
+    "./snippets/*"
+  ]
+}
