@@ -197,21 +197,31 @@ pub(super) fn query_from_raw(raw: &str) -> Vec<KeyValue> {
         .collect()
 }
 
-/// Parse a v2 `body` object (mode-tagged).
-pub(super) fn parse_body(v: Option<&Value>, report: &mut Report, locator: &str) -> Option<Body> {
+/// Parse a v2 `body` object (mode-tagged). `headers` is the request's header list, consulted
+/// to infer a raw body's media type when no explicit editor `language` is set (RQ-4140).
+pub(super) fn parse_body(
+    v: Option<&Value>,
+    headers: &[KeyValue],
+    report: &mut Report,
+    locator: &str,
+) -> Option<Body> {
     let body = v?;
     let mode = body.get("mode").and_then(Value::as_str)?;
     match mode {
         "raw" => {
             let text = obj_str(body, "raw").unwrap_or_default();
+            // Precedence (RQ-4140): explicit `options.raw.language` > Content-Type header > text.
+            // An absent language must fall through to the header, not default straight to text —
+            // otherwise a JSON body with only a `Content-Type: application/json` header imports as
+            // `raw` instead of `json`. Mirrors the app's `mapBody` raw arm.
             let media_type = body
                 .get("options")
                 .and_then(|o| o.get("raw"))
                 .and_then(|r| r.get("language"))
                 .and_then(Value::as_str)
                 .map(raw_language_to_media_type)
-                .unwrap_or("text/plain")
-                .to_string();
+                .map(str::to_string)
+                .unwrap_or_else(|| raw_media_type_from_headers(headers));
             Some(Body::Raw { text, media_type })
         }
         "urlencoded" => Some(Body::UrlEncoded {
@@ -307,6 +317,45 @@ pub(super) fn raw_language_to_media_type(lang: &str) -> &'static str {
         "javascript" => "application/javascript",
         _ => "text/plain",
     }
+}
+
+/// The request's `Content-Type` header value: first *enabled* `content-type` header, trimmed,
+/// ignoring empty values and unresolved `{{var}}` templates. Mirrors the app's
+/// `findContentTypeValue` so both agree on what header (if any) is in force.
+pub(super) fn content_type_header_value(headers: &[KeyValue]) -> Option<String> {
+    let m = headers
+        .iter()
+        .find(|h| h.enabled && h.key.trim().eq_ignore_ascii_case("content-type"))?;
+    let v = m.value.trim();
+    if v.is_empty() || v.contains("{{") {
+        return None;
+    }
+    Some(v.to_string())
+}
+
+/// Infer a *raw* body's media type from the Content-Type header, matching the app's RQ-4140
+/// `mapBody`: adopt only raw-compatible types (json/html/xml/javascript, incl. vendor `+json`/
+/// `+xml`); a form/multipart/unknown/absent header must NOT reshape a raw body's mode, so it
+/// falls through to `text/plain`. Returns the canonical `RawBodyContentType` string, so both
+/// the top-level `contentType` selector and `rawContentType` match the app.
+pub(super) fn raw_media_type_from_headers(headers: &[KeyValue]) -> String {
+    let Some(raw) = content_type_header_value(headers) else {
+        return "text/plain".to_string();
+    };
+    let lower = raw.to_ascii_lowercase();
+    let mime = lower.split(';').next().unwrap_or("").trim();
+    if mime == "application/json" || mime.ends_with("+json") {
+        "application/json"
+    } else if mime == "text/html" {
+        "text/html"
+    } else if mime == "application/xml" || mime == "text/xml" || mime.ends_with("+xml") {
+        "application/xml"
+    } else if mime == "application/javascript" || mime == "text/javascript" {
+        "application/javascript"
+    } else {
+        "text/plain"
+    }
+    .to_string()
 }
 
 /// The shared `type`-dispatched auth builder. Both v2.0 and v2.1 (and v1) extract a
@@ -625,7 +674,7 @@ pub(super) fn parse_request_obj(
                 report,
                 &format!("{locator}.header"),
             );
-            let body = parse_body(r.get("body"), report, &format!("{locator}.body"));
+            let body = parse_body(r.get("body"), &headers, report, &format!("{locator}.body"));
             let auth = auth_fn(r.get("auth"), report, &format!("{locator}.auth"));
             (
                 HttpRequest {

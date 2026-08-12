@@ -224,7 +224,7 @@ fn v1_request(req: &Value, report: &mut Report, locator: &str) -> Request {
         .and_then(Value::as_str)
         .map(shared::parse_header_string)
         .unwrap_or_default();
-    let body = v1_body(req, report, locator);
+    let body = v1_body(req, &headers);
 
     // v1 scripts are strings on the request.
     let mut scripts = Scripts::default();
@@ -266,34 +266,35 @@ fn v1_request(req: &Value, report: &mut Report, locator: &str) -> Request {
     )
 }
 
-/// v1 body: `dataMode` selects `rawModeData` (raw) or `data[]` (urlencoded/params).
-fn v1_body(req: &Value, _report: &mut Report, _locator: &str) -> Option<Body> {
-    let mode = req.get("dataMode").and_then(Value::as_str)?;
+/// v1 body: `dataMode` selects `rawModeData` (raw) or `data[]` (urlencoded/params). Mirrors the
+/// app's `v1Body` normalisation: a raw body is produced when `dataMode == "raw"` OR when
+/// `rawModeData` is a string and `dataMode` is absent — including an empty raw string (still a
+/// body). v1 carries no editor `language`, so a raw body's media type is inferred from the
+/// Content-Type header (RQ-4140), exactly as the app's `mapBody` does post-normalisation.
+fn v1_body(req: &Value, headers: &[KeyValue]) -> Option<Body> {
+    let mode = req.get("dataMode").and_then(Value::as_str);
+    let raw_mode_data = req.get("rawModeData").and_then(Value::as_str);
+
+    if mode == Some("raw") || (raw_mode_data.is_some() && mode.is_none()) {
+        let text = raw_mode_data
+            .or_else(|| req.get("data").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string();
+        return Some(Body::Raw {
+            text,
+            media_type: shared::raw_media_type_from_headers(headers),
+        });
+    }
+
     match mode {
-        "raw" => {
-            let text = req
-                .get("rawModeData")
-                .and_then(Value::as_str)
-                .or_else(|| req.get("data").and_then(Value::as_str))
-                .unwrap_or_default()
-                .to_string();
-            if text.is_empty() {
-                None
-            } else {
-                Some(Body::Raw {
-                    text,
-                    media_type: "text/plain".to_string(),
-                })
-            }
-        }
-        "urlencoded" | "params" => {
+        Some("urlencoded") | Some("params") => {
             // The app requires `data` to be an array; a null/absent `data` means no body
             // (an empty array is still a body — form/multipart with no rows).
             let Some(Value::Array(_)) = req.get("data") else {
                 return None;
             };
             let fields = v1_data_kv(req.get("data"));
-            if mode == "params" {
+            if mode == Some("params") {
                 Some(Body::FormData {
                     fields: fields.into_iter().map(FormField::Text).collect(),
                 })

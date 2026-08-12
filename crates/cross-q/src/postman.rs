@@ -333,4 +333,114 @@ mod tests {
         let mut r = Report::new(Fidelity::Lossless);
         assert!(parse_postman(r#"{"foo":"bar"}"#, &mut r).is_err());
     }
+
+    // ---- raw body media-type inference (RQ-4140) --------------------------------------
+
+    fn http_of(ws: &Workspace) -> &cq_model::HttpRequest {
+        let Item::Request(req) = &ws.collections[0].items[0] else {
+            panic!("expected request")
+        };
+        let Protocol::Http(http) = &req.protocol else {
+            panic!("expected http")
+        };
+        http
+    }
+
+    fn raw_media_type(ws: &Workspace) -> &str {
+        match ws.collections[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::Request(r) => Some(r),
+                _ => None,
+            })
+            .and_then(|r| match &r.protocol {
+                Protocol::Http(h) => h.body.as_ref(),
+                _ => None,
+            })
+            .expect("a body")
+        {
+            Body::Raw { media_type, .. } => media_type,
+            other => panic!("expected raw body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn v2_raw_body_infers_json_from_content_type_header() {
+        // No editor `language`: the Content-Type header must drive the media type (RQ-4140),
+        // so a JSON body carrying only `Content-Type: application/json` imports as json, not raw.
+        let json = format!(
+            r#"{{ "info": {{ "name": "B", "schema": "{V21_SCHEMA}" }},
+                 "item": [{{ "name": "post", "request": {{
+                    "method": "POST", "url": "https://x.test/p",
+                    "header": [{{ "key": "Content-Type", "value": "application/json" }}],
+                    "body": {{ "mode": "raw", "raw": "{{\"a\":1}}" }}
+                 }} }}] }}"#
+        );
+        let (ws, _) = parse(&json);
+        assert_eq!(raw_media_type(&ws), "application/json");
+    }
+
+    #[test]
+    fn v2_raw_body_form_header_does_not_reshape() {
+        // A form/multipart Content-Type must NOT reshape a raw body — it stays raw/text.
+        let json = format!(
+            r#"{{ "info": {{ "name": "B", "schema": "{V21_SCHEMA}" }},
+                 "item": [{{ "name": "post", "request": {{
+                    "method": "POST", "url": "https://x.test/p",
+                    "header": [{{ "key": "Content-Type", "value": "application/x-www-form-urlencoded" }}],
+                    "body": {{ "mode": "raw", "raw": "a=1" }}
+                 }} }}] }}"#
+        );
+        let (ws, _) = parse(&json);
+        assert_eq!(raw_media_type(&ws), "text/plain");
+    }
+
+    #[test]
+    fn v2_raw_body_language_wins_over_header() {
+        // An explicit editor language beats the header (the app surfaces the conflict as a warning).
+        let json = format!(
+            r#"{{ "info": {{ "name": "B", "schema": "{V21_SCHEMA}" }},
+                 "item": [{{ "name": "post", "request": {{
+                    "method": "POST", "url": "https://x.test/p",
+                    "header": [{{ "key": "Content-Type", "value": "text/html" }}],
+                    "body": {{ "mode": "raw", "raw": "{{}}", "options": {{ "raw": {{ "language": "json" }} }} }}
+                 }} }}] }}"#
+        );
+        let (ws, _) = parse(&json);
+        assert_eq!(raw_media_type(&ws), "application/json");
+    }
+
+    #[test]
+    fn v1_raw_body_without_datamode_is_a_body_and_infers_from_header() {
+        // v1: `rawModeData` present + absent `dataMode` → a raw body, media type from the
+        // (newline-string) headers. Previously cross-q required `dataMode` and dropped the body.
+        let json = r#"{
+            "id": "c1", "name": "v1", "order": ["r1"],
+            "requests": [{
+                "id": "r1", "name": "post", "collectionId": "c1", "method": "POST",
+                "url": "https://x.test/p",
+                "headers": "Content-Type: application/json\n",
+                "rawModeData": "{\"a\":1}"
+            }]
+        }"#;
+        let (ws, _) = parse(json);
+        assert_eq!(raw_media_type(&ws), "application/json");
+    }
+
+    #[test]
+    fn v1_empty_raw_body_is_still_a_body() {
+        // An empty `rawModeData` is still a raw body (the app emits `{mode:'raw', raw:''}`),
+        // not "no body". No Content-Type → text/plain.
+        let json = r#"{
+            "id": "c1", "name": "v1", "order": ["r1"],
+            "requests": [{
+                "id": "r1", "name": "post", "collectionId": "c1", "method": "POST",
+                "url": "https://x.test/p", "dataMode": "raw", "rawModeData": ""
+            }]
+        }"#;
+        let (ws, _) = parse(json);
+        assert!(matches!(http_of(&ws).body, Some(Body::Raw { .. })));
+        assert_eq!(raw_media_type(&ws), "text/plain");
+    }
 }
