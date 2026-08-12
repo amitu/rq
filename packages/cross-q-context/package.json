@@ -1,7 +1,7 @@
 {
   "name": "@requestly/cross-q-context",
   "version": "0.1.0",
-  "description": "The cross-q-context runtime — transform and (soon) execute every API-client script dialect (Postman pm.*/postman.*, Bruno bru.*) against the rq.* API. WebAssembly core, strings in / typed objects out. This build ships the compat (transform) pillar.",
+  "description": "cross-q-context — the API-client scripting core. This build ships the transform pillar: rewrite every script dialect (Postman pm.*/postman.*, Bruno bru.*) to the rq.* API (OXC-based Rust → WebAssembly, strings in / typed objects out). The execute pillar (the safe QuickJS engine) is the app's quickjs-emscripten runtime, absorbed here as JS — not a separate Rust runtime.",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -15,6 +15,21 @@
 > `@requestly/sandbox-node`, `@requestly/script-analysis` — all currently private);
 > `cross-q-context` is the clean-room, single-language, publishable unification of those.
 
+> ⚠️ **2026-08-12 architecture correction (supersedes the "one Rust crate" framing above).**
+> The "one Rust crate executor, published as crate + WASM + PyPI" plan was set *before* we
+> discovered that Requestly's shipped safe engine — `QuickJsSandbox` (`@requestly/sandbox-node`,
+> `quickjs-emscripten`) — is already a mature QuickJS-**WASM** runtime that runs in **both** Node
+> **and** the browser. So the pillars split by language:
+> - **Transform pillar** (`pm.*`/`bru.* → rq.*`, §3) — **Rust** (`cq-transform`) → WASM. Real, shipping (`@requestly/cross-q-context`), consumed by the app.
+> - **Execute pillar** (the QuickJS sandbox, §4) — **the app's `QuickJsSandbox` (JS), absorbed** into cross-q-context and made browser-portable — **not** a separate Rust `rquickjs` runtime.
+>
+> The scaffolded Rust `rquickjs` runtime was **retired** on this date: a second QuickJS engine
+> would reintroduce the very drift "one core" existed to prevent, and no target host needs it
+> (quickjs-emscripten already covers Node + browser). Consequently the **PyPI runtime wheel** and
+> the **cross-engine conformance oracle (§9)** are dropped. §1/§4/§7/§9 below still describe the
+> retired Rust-executor plan and will be rewritten during the runtime migration; read them through
+> this correction until then.
+
 ---
 
 ## How to read this document
