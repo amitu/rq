@@ -13,6 +13,5 @@
     "rootDir": "./src"
   },
   "include": ["src/runtime/**/*"],
-  "//": "src/runtime/definitions (the vendored rq.* API, ADR-213 step 3) is excluded until its imports are adapted onto the local contract/model — it does not build yet.",
-  "exclude": ["src/runtime/definitions"]
+  "exclude": ["src/runtime/definitions/codegen", "src/runtime/**/__tests__/**", "src/runtime/**/*.test.ts"]
 }

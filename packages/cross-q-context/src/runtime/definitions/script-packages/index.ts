@@ -1,4 +1,4 @@
-export { parseRequireId, type ParsedRequireId } from './parse-require-id';
+export { parseRequireId, type ParsedRequireId } from './parse-require-id.js';
 
 export {
   type InstallRequest,
@@ -14,7 +14,7 @@ export {
   type UninstallRequest,
   type UninstallErrorCode,
   type UninstallResult,
-} from './install-types';
+} from './install-types.js';
 
 export {
   type PackageFilter,
@@ -23,13 +23,13 @@ export {
   type BlacklistEntry,
   type BlacklistEntryPackage,
   type BlacklistEntryVersion,
-} from './package-filter';
+} from './package-filter.js';
 
-export { type PackageResolver, type SafePackageResolver } from './package-resolver';
+export { type PackageResolver, type SafePackageResolver } from './package-resolver.js';
 
 export {
   validateRequires,
   type DuplicatePackageError,
   type ExtractedRequire,
   type ValidateRequiresResult,
-} from './validate-requires';
+} from './validate-requires.js';

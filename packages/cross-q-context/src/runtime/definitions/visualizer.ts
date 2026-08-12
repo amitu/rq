@@ -26,8 +26,8 @@
  * globals — so it stays platform-agnostic and unit-testable.
  */
 
-import type { JsonValue } from '@requestly/shared-types/common';
-import type { VisualizerDirective } from '@requestly/shared-types/runtime';
+import type { JsonValue } from './_deps.js';
+import type { VisualizerDirective } from './_deps.js';
 
 /** Sink the visualizer namespace records its compiled/error output — or a `clear()` marker — onto (ADR-202). Mirrors ExecutionDirectiveCollector. */
 export interface VisualizerCollector {

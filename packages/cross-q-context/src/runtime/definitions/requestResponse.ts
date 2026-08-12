@@ -7,7 +7,7 @@
  * Internal types (KeyValuePair metadata, HttpBody variants) are not leaked.
  */
 
-import { EntryType } from '@requestly/shared-types';
+import { EntryType } from './_deps.js';
 import type {
   GrpcScriptResponse as GrpcScriptResponseData,
   GraphQLResponse,
@@ -16,8 +16,8 @@ import type {
   ParsedGraphQLRequest,
   ParsedHttpRequest,
   ParsedKeyValue,
-} from '@requestly/shared-types';
-import type { GrpcStreamMessage, RequestHeaderMutation, ScriptMessageInput } from '@requestly/shared-types/runtime';
+} from './_deps.js';
+import type { GrpcStreamMessage, RequestHeaderMutation, ScriptMessageInput } from './_deps.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -551,7 +551,11 @@ function buildScriptHttpResponse(response: HttpResponse | GraphQLResponse, libs:
   // so it never pollutes Object.keys / JSON.stringify (toJSON already omits it).
   Object.defineProperty(responseObj, 'stream', {
     get() {
-      return globalThis.Buffer.from(body, bodyEncoding === 'base64' ? 'base64' : 'utf8');
+      // `Buffer` is provided by the host (real Node Buffer in Developer/node:vm; the SafeBuffer
+      // shim in the Safe engine). Typed here without pulling @types/node into this browser-capable
+      // package.
+      const hostBuffer = (globalThis as unknown as { Buffer: { from(data: string, encoding?: string): unknown } }).Buffer;
+      return hostBuffer.from(body, bodyEncoding === 'base64' ? 'base64' : 'utf8');
     },
     enumerable: false,
     configurable: false,

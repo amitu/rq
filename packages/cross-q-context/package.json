@@ -40,7 +40,11 @@
     "build:runtime": "tsc",
     "test": "node test/smoke.mjs"
   },
+  "dependencies": {
+    "chai": "6.2.2"
+  },
   "devDependencies": {
+    "@types/chai": "5.2.2",
     "typescript": "5.7.3"
   }
 }

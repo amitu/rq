@@ -1,5 +1,5 @@
-import { EntryType } from '@requestly/shared-types/common';
-import type { EnvironmentVariables } from '@requestly/shared-types/common';
+import { EntryType } from './_deps.js';
+import type { EnvironmentVariables } from './_deps.js';
 import type {
   ExecutionDirective,
   RequestHeaderMutation,
@@ -7,18 +7,18 @@ import type {
   ScriptPhase,
   TestResult,
   VisualizerDirective,
-} from '@requestly/shared-types/runtime';
+} from './_deps.js';
 
-import { createCookiesNamespace } from './cookies';
-import type { CookieJarBridge } from './cookies';
-import { createExecutionNamespace } from './execution';
-import type { ExecutionDirectiveCollector } from './execution';
-import type { AssertionLibs, RequestMutationCollector } from './requestResponse';
-import { buildScriptMessage, buildScriptRequest, buildScriptResponse } from './requestResponse';
-import type { RunRequestImpl } from './runRequest';
-import { createSendRequest } from './sendRequest';
-import { createVisualizer } from './visualizer';
-import type { VisualizerCollector } from './visualizer';
+import { createCookiesNamespace } from './cookies.js';
+import type { CookieJarBridge } from './cookies.js';
+import { createExecutionNamespace } from './execution.js';
+import type { ExecutionDirectiveCollector } from './execution.js';
+import type { AssertionLibs, RequestMutationCollector } from './requestResponse.js';
+import { buildScriptMessage, buildScriptRequest, buildScriptResponse } from './requestResponse.js';
+import type { RunRequestImpl } from './runRequest.js';
+import { createSendRequest } from './sendRequest.js';
+import { createVisualizer } from './visualizer.js';
+import type { VisualizerCollector } from './visualizer.js';
 
 // ---------------------------------------------------------------------------
 // Raw mutation types — Layer 1 of ADR-053.

@@ -1,4 +1,4 @@
-import type { ExternalBuiltinPackage, NodeBuiltinPackage } from './types';
+import type { ExternalBuiltinPackage, NodeBuiltinPackage } from './types.js';
 
 /**
  * Single source of truth for external built-in packages available via require().

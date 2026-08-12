@@ -24,7 +24,7 @@ import type {
   RunRequestEnvelope,
   RunRequestErrorKind,
   SerializedSubResponse,
-} from '@requestly/shared-types/runtime';
+} from './_deps.js';
 
 // ---------------------------------------------------------------------------
 // Host round-trip

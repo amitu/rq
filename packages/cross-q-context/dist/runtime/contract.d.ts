@@ -2,10 +2,12 @@
 export type Json = null | boolean | number | string | Json[] | {
     [key: string]: Json;
 };
-/** Which script phase is running. `rq.response` is absent in `pre-request`. */
+/** Which script phase is running. `rq.response` is absent in `pre-request`; `on-message` runs per
+ * inbound realtime message (WebSocket/Socket.IO/gRPC stream). */
 export declare enum ScriptPhase {
     preRequest = "pre-request",
-    postResponse = "post-response"
+    postResponse = "post-response",
+    onMessage = "on-message"
 }
 /**
  * The sandbox engine. Published (WASM/browser) builds are `safe` only; an unrecognized value
@@ -25,28 +27,6 @@ export interface ExecutionMetadata {
     entryIndex: number;
     totalEntries: number;
     collectionId: string | null;
-}
-/**
- * The serializable context handed to the guest (JSON-parsed inside the realm). Variable scopes are
- * `key → value` maps; `request`/`response` are opaque JSON the shim reads. `response` is null in the
- * pre-request phase.
- */
-export interface ScriptExecutionContext {
-    environment: Record<string, Json>;
-    globals: Record<string, Json>;
-    collectionVariables: Record<string, Json>;
-    variables: Record<string, Json>;
-    request: Json;
-    response: Json | null;
-    info: ExecutionMetadata;
-}
-/** One `execute` call's input. */
-export interface ScriptExecutionInput {
-    script: string;
-    phase: ScriptPhase;
-    mode: ScriptExecutionMode;
-    context: ScriptExecutionContext;
-    timeoutMs?: number;
 }
 /** The outcome of one `rq.test(...)`. */
 export type TestStatus = 'passed' | 'failed' | 'skipped';
@@ -70,23 +50,23 @@ export interface MutationDiff {
     collectionVariables?: Record<string, Json>;
     variables?: Record<string, Json>;
 }
-/** A recorded change to the outgoing request's headers (`rq.request.headers.*`), tagged on `op`. */
+/** A recorded change to the outgoing request's headers (`rq.request.headers.*`), tagged on `kind`. */
 export type RequestHeaderMutation = {
-    op: 'add';
-    key: string;
+    kind: 'add';
+    name: string;
     value: string;
 } | {
-    op: 'upsert';
-    key: string;
+    kind: 'upsert';
+    name: string;
     value: string;
 } | {
-    op: 'remove';
+    kind: 'remove';
     name: string;
 } | {
-    op: 'clear';
+    kind: 'clear';
 };
 export interface RequestMutationDiff {
-    headers?: RequestHeaderMutation[];
+    headers?: readonly RequestHeaderMutation[];
 }
 /** A chaining directive drained from the run (`rq.execution.setNextRequest` / `skipRequest`). */
 export type ExecutionDirective = {
@@ -137,8 +117,4 @@ export type SandboxExecutionEvent = {
 export interface SandboxHostCallbacks {
     sendRequest?: (request: Json) => Promise<Json>;
     runRequest?: (descriptor: Json) => Promise<Json>;
-}
-/** The engine contract: execute a script, stream events, terminate with a result. */
-export interface Sandbox extends RuntimeComponent {
-    execute(input: ScriptExecutionInput, hostCallbacks?: SandboxHostCallbacks): Promise<StreamReader<SandboxExecutionEvent>>;
 }

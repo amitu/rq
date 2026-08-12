@@ -17,11 +17,11 @@
  * globals — so it stays platform-agnostic and unit-testable.
  */
 
-import { ScriptPhase } from '@requestly/shared-types/runtime';
-import type { ExecutionDirective } from '@requestly/shared-types/runtime';
+import { ScriptPhase } from './_deps.js';
+import type { ExecutionDirective } from './_deps.js';
 
-import { createRunRequest } from './runRequest';
-import type { RunRequestImpl, ScriptRunRequest } from './runRequest';
+import { createRunRequest } from './runRequest.js';
+import type { RunRequestImpl, ScriptRunRequest } from './runRequest.js';
 
 /** Sink the execution namespace records its directive onto (ADR-169). Mirrors RequestMutationCollector. */
 export interface ExecutionDirectiveCollector {

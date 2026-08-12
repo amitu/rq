@@ -1,9 +1,9 @@
-export { buildScriptMessage } from './requestResponse';
-export type { ScriptMessage, MessageAssertions } from './requestResponse';
-export { PHASE_RESTRICTED } from './types';
-export { createRqNamespace, type RawMutationEntry, type RawScopeMutations } from './rqMethods';
-export { ARRAY_METHODS_SHIM } from './arrayMethodsShim';
-export { CONVENIENCE_GLOBALS_SHIM } from './convenienceGlobalsShim';
+export { buildScriptMessage } from './requestResponse.js';
+export type { ScriptMessage, MessageAssertions } from './requestResponse.js';
+export { PHASE_RESTRICTED } from './types.js';
+export { createRqNamespace, type RawMutationEntry, type RawScopeMutations } from './rqMethods.js';
+export { ARRAY_METHODS_SHIM } from './arrayMethodsShim.js';
+export { CONVENIENCE_GLOBALS_SHIM } from './convenienceGlobalsShim.js';
 export {
   CookieJarHostDenied,
   CookieJarInvalidUrl,
@@ -14,22 +14,22 @@ export {
   type ScriptCookieInput,
   type ScriptCookieJar,
   type ScriptCookiesNamespace,
-} from './cookies';
-export { type AssertionLibs } from './requestResponse';
+} from './cookies.js';
+export { type AssertionLibs } from './requestResponse.js';
 export {
   createExecutionNamespace,
   SkipRequestSignal,
   type ExecutionDirectiveCollector,
   type RqExecutionNamespace,
   type ScriptExecutionLocation,
-} from './execution';
+} from './execution.js';
 export {
   createVisualizer,
   VISUALIZER_DATA_GLOBAL,
   type RqVisualizerNamespace,
   type VisualizerCollector,
   type VisualizerLibs,
-} from './visualizer';
+} from './visualizer.js';
 export {
   createRunRequest,
   RunRequestFailure,
@@ -39,7 +39,7 @@ export {
   type RunRequestOptions,
   type RunRequestResponse,
   type ScriptRunRequest,
-} from './runRequest';
+} from './runRequest.js';
 export {
   createSendRequest,
   SendRequestError,
@@ -53,8 +53,8 @@ export {
   type SendRequestHeaders,
   type SendRequestInput,
   type SendRequestResponse,
-} from './sendRequest';
-export { GLOBAL_NAMES } from './codegen/globals-list';
+} from './sendRequest.js';
+export { GLOBAL_NAMES } from './codegen/globals-list.js';
 export {
   DEPRECATED_IDENTIFIERS,
   SHIMMED_IDENTIFIERS,
@@ -65,7 +65,7 @@ export {
   type DeprecatedIdentifierPolicy,
   type DeprecationEmit,
   type ShimmedIdentifier,
-} from './deprecated-identifiers';
+} from './deprecated-identifiers.js';
 export {
   EXTERNAL_BUILTIN_PACKAGES,
   NODE_BUILTIN_PACKAGES,
@@ -76,7 +76,7 @@ export {
   type NodeBuiltinPackageId,
   type SafeModeClass,
   type ScriptPackageUnsupportedReason,
-} from './builtInPackages';
+} from './builtInPackages/index.js';
 
 export {
   parseRequireId,
@@ -106,10 +106,10 @@ export {
   type DuplicatePackageError,
   type ExtractedRequire,
   type ValidateRequiresResult,
-} from './script-packages';
+} from './script-packages/index.js';
 export {
   USER_PACKAGE_EXTENSION,
   extractPackageName,
   isUserPackageRequire,
   toUserPackageRequireId,
-} from './script-packages/user-packages';
+} from './script-packages/user-packages.js';

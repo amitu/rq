@@ -1,6 +1,6 @@
-import { parseRequireId } from './parse-require-id';
+import { parseRequireId } from './parse-require-id.js';
 
-import type { InstallPackageSpec } from './install-types';
+import type { InstallPackageSpec } from './install-types.js';
 
 export type DuplicatePackageError =
   | { readonly kind: 'version-conflict'; readonly packageName: string; readonly specifiers: readonly string[] }

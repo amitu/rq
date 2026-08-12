@@ -1,23 +1,19 @@
-// cross-q-context — the scripting runtime CONTRACT (self-contained, ADR-213 Layer 2 migration).
+// cross-q-context — the scripting runtime CONTRACT primitives (self-contained, ADR-213 Layer 2).
 //
-// This is the canonical, dependency-free contract for executing a script: a pure function of a
-// serializable input to a serializable output, so every host (a browser tab, a Node worker, a CLI,
-// a future `rq` app) speaks the same `execute(input) → result`. It deliberately imports NOTHING —
-// cross-q-context must be self-contained in the `rq` repo with zero dependency on the current app.
-//
-// Requestly's app currently expresses this contract inside `@requestly/shared-types` (woven through
-// its `common`/`runtime` type graph). As the runtime migrates here, the app becomes a CONSUMER: it
-// maps its richer internal types onto this contract at the seam. This file is the source of truth;
-// extra app-only channels (cookies, visualizer, packages, on-message) layer on top without changing
-// the core shape.
+// The low-level, model-free primitives every host shares. The request/response DATA MODEL is in
+// `model.ts`; the composed execution types (`ScriptExecutionInput`/`Context`, `Sandbox`) that key
+// off both live in `execution.ts`. This file imports NOTHING — cross-q-context is self-contained in
+// the `rq` repo with zero dependency on the current app.
 
 /** A serializable JSON value. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
-/** Which script phase is running. `rq.response` is absent in `pre-request`. */
+/** Which script phase is running. `rq.response` is absent in `pre-request`; `on-message` runs per
+ * inbound realtime message (WebSocket/Socket.IO/gRPC stream). */
 export enum ScriptPhase {
   preRequest = 'pre-request',
   postResponse = 'post-response',
+  onMessage = 'on-message',
 }
 
 /**
@@ -39,30 +35,6 @@ export interface ExecutionMetadata {
   entryIndex: number;
   totalEntries: number;
   collectionId: string | null;
-}
-
-/**
- * The serializable context handed to the guest (JSON-parsed inside the realm). Variable scopes are
- * `key → value` maps; `request`/`response` are opaque JSON the shim reads. `response` is null in the
- * pre-request phase.
- */
-export interface ScriptExecutionContext {
-  environment: Record<string, Json>;
-  globals: Record<string, Json>;
-  collectionVariables: Record<string, Json>;
-  variables: Record<string, Json>;
-  request: Json;
-  response: Json | null;
-  info: ExecutionMetadata;
-}
-
-/** One `execute` call's input. */
-export interface ScriptExecutionInput {
-  script: string;
-  phase: ScriptPhase;
-  mode: ScriptExecutionMode;
-  context: ScriptExecutionContext;
-  timeoutMs?: number;
 }
 
 /** The outcome of one `rq.test(...)`. */
@@ -90,15 +62,15 @@ export interface MutationDiff {
   variables?: Record<string, Json>;
 }
 
-/** A recorded change to the outgoing request's headers (`rq.request.headers.*`), tagged on `op`. */
+/** A recorded change to the outgoing request's headers (`rq.request.headers.*`), tagged on `kind`. */
 export type RequestHeaderMutation =
-  | { op: 'add'; key: string; value: string }
-  | { op: 'upsert'; key: string; value: string }
-  | { op: 'remove'; name: string }
-  | { op: 'clear' };
+  | { kind: 'add'; name: string; value: string }
+  | { kind: 'upsert'; name: string; value: string }
+  | { kind: 'remove'; name: string }
+  | { kind: 'clear' };
 
 export interface RequestMutationDiff {
-  headers?: RequestHeaderMutation[];
+  headers?: readonly RequestHeaderMutation[];
 }
 
 /** A chaining directive drained from the run (`rq.execution.setNextRequest` / `skipRequest`). */
@@ -139,9 +111,4 @@ export type SandboxExecutionEvent = { type: 'log'; log: LogEntry } | { type: 're
 export interface SandboxHostCallbacks {
   sendRequest?: (request: Json) => Promise<Json>;
   runRequest?: (descriptor: Json) => Promise<Json>;
-}
-
-/** The engine contract: execute a script, stream events, terminate with a result. */
-export interface Sandbox extends RuntimeComponent {
-  execute(input: ScriptExecutionInput, hostCallbacks?: SandboxHostCallbacks): Promise<StreamReader<SandboxExecutionEvent>>;
 }

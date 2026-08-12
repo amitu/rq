@@ -1,4 +1,4 @@
-import { PHASE_DESCRIPTORS, ScriptPhase } from '@requestly/shared-types/runtime';
+import { PHASE_DESCRIPTORS, ScriptPhase } from './_deps.js';
 
 /**
  * Map from entry name to allowed phases. Entries not in this map are

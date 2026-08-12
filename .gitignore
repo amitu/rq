@@ -20,3 +20,7 @@ Cargo.lock.orig
 /crates/cross-q/tests/corpus/postman-transformer/
 /crates/cross-q/tests/corpus/realworld/
 /crates/cross-q/tests/corpus/bruno-testbench/
+
+# npm deps for the cross-q-context runtime package (TS build)
+node_modules/
+packages/*/package-lock.json
