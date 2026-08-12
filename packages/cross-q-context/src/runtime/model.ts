@@ -180,7 +180,9 @@ export interface ScriptMessageInput {
 }
 
 // ── variables ───────────────────────────────────────────────────────────────────────────────
-export type VariableDataType = 'string' | 'number' | 'boolean' | 'secret';
+/** The variable value type. `string` (not a literal union) so the app's nominal `VariableDataType`
+ * enum — string/number/boolean/secret/array — assigns at the seam; consumers switch on the value. */
+export type VariableDataType = string;
 
 /** A resolved variable at the runtime boundary (the app's `VariableData`). */
 export interface VariableData {
