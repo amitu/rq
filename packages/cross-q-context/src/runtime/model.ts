@@ -79,7 +79,8 @@ export type ParsedKeyValue = KeyValue;
 export interface FormDataKeyValue {
   key: string;
   value: string;
-  type: 'text' | 'file';
+  // `string` (not 'text'|'file') so the app's schema type assigns at the seam.
+  type: string;
 }
 
 export interface PathVariable {
@@ -87,10 +88,13 @@ export interface PathVariable {
   value: string;
 }
 
+// The enum-typed data fields below are typed `string` (not the local enums) so the app's own
+// nominal enums (RequestContentType/RawBodyContentType/RequestMethod from @requestly/schemas) assign
+// structurally at the seam. The enums are still exported for the rq.* API's own comparisons.
 export interface HttpBody {
-  contentType: RequestContentType;
+  contentType: string;
   raw?: string;
-  rawContentType?: RawBodyContentType;
+  rawContentType?: string;
   formUrlEncoded: KeyValue[];
   formData: FormDataKeyValue[];
   binary?: { name: string; path: string };
@@ -99,12 +103,12 @@ export interface HttpBody {
 // ── HTTP request/response ───────────────────────────────────────────────────────────────────
 export interface HttpRequest {
   url: string;
-  method: RequestMethod;
+  method: string;
   headers: KeyValue[];
   queryParams: KeyValue[];
   pathVariables: PathVariable[];
   body: HttpBody;
-  contentType: RequestContentType;
+  contentType: string;
   auth?: Json;
 }
 export type ParsedHttpRequest = HttpRequest;
@@ -116,8 +120,8 @@ export interface HttpResponse {
   body: string;
   time: number;
   size: number;
-  /** Body byte encoding (ADR-153); absent ⇒ 'utf8'. */
-  bodyEncoding?: 'utf8' | 'base64';
+  /** Body byte encoding (ADR-153); absent ⇒ 'utf8'. `string` for seam compatibility. */
+  bodyEncoding?: string;
 }
 
 // ── GraphQL request/response ────────────────────────────────────────────────────────────────
@@ -128,7 +132,7 @@ export interface GraphQLBody {
 }
 export interface GraphQLRequest {
   url: string;
-  method: RequestMethod;
+  method: string;
   headers: KeyValue[];
   queryParams: KeyValue[];
   body: GraphQLBody;
@@ -180,7 +184,9 @@ export interface ScriptMessageInput {
 }
 
 // ── variables ───────────────────────────────────────────────────────────────────────────────
-export type VariableDataType = 'string' | 'number' | 'boolean' | 'secret';
+/** The variable value type. `string` (not a literal union) so the app's nominal `VariableDataType`
+ * enum — string/number/boolean/secret/array — assigns at the seam; consumers switch on the value. */
+export type VariableDataType = string;
 
 /** A resolved variable at the runtime boundary (the app's `VariableData`). */
 export interface VariableData {

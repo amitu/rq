@@ -1,6 +1,7 @@
-/** A serializable JSON value. */
-export type Json = null | boolean | number | string | Json[] | {
-    [key: string]: Json;
+/** A serializable JSON value. Arrays/objects are `readonly` to match the app's `JsonValue` at the
+ * consumption seam (a readonly value is safely assignable where a readonly one is expected). */
+export type Json = null | boolean | number | string | readonly Json[] | {
+    readonly [key: string]: Json;
 };
 /** Which script phase is running. `rq.response` is absent in `pre-request`; `on-message` runs per
  * inbound realtime message (WebSocket/Socket.IO/gRPC stream). */
