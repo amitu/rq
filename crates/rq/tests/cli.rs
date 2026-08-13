@@ -494,3 +494,54 @@ fn without_a_project_the_error_says_what_to_do() {
     assert!(text.contains("no rq project found"), "{text}");
     assert!(text.contains("rq init"), "{text}");
 }
+
+#[test]
+fn import_reads_a_postman_collection_into_runnable_requests() {
+    let stub = Stub::start(1, |_| (200, "OK", "{\"ok\":true}".into()));
+    let f = Fixture::new();
+
+    let collection = serde_json::json!({
+        "info": { "name": "Acme", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+        "item": [{
+            "name": "ping",
+            "request": {
+                "method": "GET",
+                "header": [{ "key": "X-Trace", "value": "abc" }],
+                "url": { "raw": format!("{}/ping", stub.base) }
+            }
+        }]
+    });
+    let path = f.root().join("acme.postman_collection.json");
+    std::fs::write(&path, collection.to_string()).unwrap();
+
+    let out = f.rq(&["import", path.to_str().unwrap()]);
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("imported 1 request"), "{text}");
+
+    // It is a real request, not just files on disk.
+    let run = f.rq(&["r", "Acme/ping"]);
+    assert!(run.status.success(), "{}{}", stdout(&run), stderr(&run));
+    assert_eq!(stub.next().header("x-trace"), Some("abc"));
+}
+
+#[test]
+fn import_reads_another_rq_project_directory() {
+    let source = Fixture::new();
+    source.write(
+        "github/issues",
+        "---\nurl: https://api.github.com/issues\nheaders:\n  Accept: application/json\n---\n",
+    );
+
+    let target = Fixture::new();
+    let out = target.rq(&["import", source.root().to_str().unwrap()]);
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(
+        text.contains("(rq)"),
+        "the source format must be detected: {text}"
+    );
+
+    let listed = stdout(&target.rq(&["l"]));
+    assert!(listed.contains("issues"), "{listed}");
+}

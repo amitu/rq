@@ -22,9 +22,9 @@ struct Cli {
 enum Command {
     /// Convert a collection to another format.
     Convert {
-        /// A curl command, or a path to an input file or (Bruno) collection directory.
+        /// A curl command, or a path to an input file or collection directory.
         input: String,
-        /// Target format: rq | mapped | postman | bruno.
+        /// Target format: rq | requestly | mapped | postman | bruno.
         #[arg(long)]
         to: String,
         /// Source format override (autodetected if omitted).
@@ -76,7 +76,9 @@ fn run() -> anyhow::Result<ExitCode> {
             println!("  IMPORT   curl        ✅");
             println!("  IMPORT   postman     ✅   (Collection v1.0 / v2.0 / v2.1)");
             println!("  IMPORT   bruno       ✅   (.bru v2 — file or collection directory)");
-            println!("  EXPORT   rq          ✅   (Requestly LOCAL_FS 1.12.0)");
+            println!("  IMPORT   rq          ✅   (an rq project — file or project directory)");
+            println!("  EXPORT   rq          ✅   (an rq project — one Markdown file per request)");
+            println!("  EXPORT   requestly   ✅   (Requestly LOCAL_FS 1.12.0)");
             println!(
                 "  EXPORT   mapped      ✅   (Requestly MappedItems — the app's import contract)"
             );
@@ -91,8 +93,8 @@ fn run() -> anyhow::Result<ExitCode> {
 }
 
 /// A resolved input: where it came from, the payload to hand a parser, and the detected
-/// source format (if any). For a Bruno collection directory the payload is the virtual-FS
-/// map (JSON) the importer expects.
+/// source format (if any). For a collection *directory* (rq or Bruno) the payload is the
+/// virtual-FS map (JSON) the importer expects.
 struct Resolved {
     origin: String,
     payload: String,
@@ -104,18 +106,31 @@ struct Resolved {
 fn resolve_input(input: &str, from: Option<&str>) -> anyhow::Result<Resolved> {
     let p = Path::new(input);
     if p.is_dir() {
-        // A directory is a Bruno collection: walk it into the virtual-FS map the importer
-        // consumes (the native side of the no-filesystem-in-WASM boundary).
+        // A directory is a collection tree — an rq project or a Bruno collection. Walk it
+        // into the virtual-FS map the importers consume (the native side of the
+        // no-filesystem-in-WASM boundary).
         let map = read_dir_map(p)?;
-        anyhow::ensure!(
-            map.keys().any(|k| k.ends_with(".bru") || k == "bruno.json"),
-            "directory {} has no .bru / bruno.json — not a Bruno collection",
-            p.display()
-        );
+        let detected = if map.contains_key(rq_doc::layout::MARKER)
+            || map
+                .keys()
+                .any(|k| k.ends_with(rq_doc::layout::REQUEST_FILE))
+        {
+            "rq"
+        } else if map.keys().any(|k| k.ends_with(".bru") || k == "bruno.json") {
+            "bruno"
+        } else {
+            anyhow::bail!(
+                "directory {} is neither an rq project ({} / {}) nor a Bruno collection \
+                 (.bru / bruno.json)",
+                p.display(),
+                rq_doc::layout::MARKER,
+                rq_doc::layout::REQUEST_FILE
+            )
+        };
         return Ok(Resolved {
             origin: format!("directory {}", p.display()),
             payload: serde_json::to_string(&map)?,
-            source: Some(from.unwrap_or("bruno").to_string()),
+            source: Some(from.unwrap_or(detected).to_string()),
         });
     }
     let (origin, payload) = if p.is_file() {
@@ -131,6 +146,18 @@ fn resolve_input(input: &str, from: Option<&str>) -> anyhow::Result<Resolved> {
         payload,
         source,
     })
+}
+
+/// Write a virtual-FS map out as real files under `dir`.
+fn write_map(map: &BTreeMap<String, String>, dir: &Path) -> anyhow::Result<()> {
+    for (rel, content) in map {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, content)?;
+    }
+    Ok(())
 }
 
 /// Read every file under `dir` into a map keyed by path relative to `dir`.
@@ -167,6 +194,8 @@ fn detect_source(text: &str, path: &Path) -> Option<&'static str> {
         || (t.starts_with("meta {") && t.contains('}'))
     {
         Some("bruno")
+    } else if path.extension().and_then(|e| e.to_str()) == Some("md") && t.starts_with("---") {
+        Some("rq")
     } else if t.starts_with('{')
         && (t.contains("schema.getpostman.com")
             || t.contains("_postman_id")
@@ -211,7 +240,15 @@ fn convert(input: &str, to: &str, from: Option<&str>, output: &Path) -> anyhow::
     let ws = cross_q::build_workspace(&source, &resolved.payload, &mut report)?;
 
     let written: PathBuf = match to {
+        // The rq CLI's project — one Markdown document per request (a virtual-FS map
+        // written out as files).
         "rq" => {
+            let map = cross_q::emit_rq_md::to_rq_md(&ws, &mut report);
+            write_map(&map, output)?;
+            output.to_path_buf()
+        }
+        // The Requestly app's LOCAL_FS tree — one concept per JSON file.
+        "requestly" | "requestly-fs" => {
             cross_q::emit_rq::emit_rq(&ws, output, &mut report)?;
             output.to_path_buf()
         }
@@ -239,17 +276,12 @@ fn convert(input: &str, to: &str, from: Option<&str>, output: &Path) -> anyhow::
         // Bruno .bru — a collection directory (virtual-FS map written out as files).
         "bruno" => {
             let map = cross_q::emit_bruno::to_bruno(&ws);
-            for (rel, content) in &map {
-                let path = output.join(rel);
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                fs::write(&path, content)?;
-            }
+            write_map(&map, output)?;
             output.to_path_buf()
         }
         other => anyhow::bail!(
-            "not_implemented: target format {other:?} (supported: rq, mapped, postman, bruno)"
+            "not_implemented: target format {other:?} \
+             (supported: rq, requestly, mapped, postman, bruno)"
         ),
     };
 

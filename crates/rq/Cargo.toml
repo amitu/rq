@@ -29,6 +29,7 @@ ureq = { version = "3", features = ["json"] }
 # Secret-shaped prompts read without echo.
 rpassword = "7"
 # curl parsing + collection import, through the Idealised Model.
+rq-doc = { path = "../rq-doc" }
 cross-q = { path = "../cross-q" }
 cq-model = { path = "../cq-model" }
 cq-report = { path = "../cq-report" }

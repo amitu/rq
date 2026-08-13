@@ -1,7 +1,9 @@
-pub mod doc;
-pub mod emit;
+/// The request document format, defined in its own crate so the converter can write it too.
+pub use rq_doc as doc;
+
 pub mod graph;
 pub mod http;
+pub mod import;
 pub mod project;
 pub mod render;
 pub mod run;

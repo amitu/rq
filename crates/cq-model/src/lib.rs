@@ -56,7 +56,10 @@ pub enum SourceFormat {
     Har,
     OpenApi,
     Curl,
+    /// The Requestly app's `LOCAL_FS` tree (split JSON files).
     Requestly,
+    /// The `rq` CLI's project: one Markdown document per request.
+    Rq,
     Hoppscotch,
     ThunderClient,
     RestClient,

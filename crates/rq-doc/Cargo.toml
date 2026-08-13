@@ -1,0 +1,15 @@
+[package]
+name = "rq-doc"
+description = "The rq request document — one Markdown file per request: parse, write, and the project layout around it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The frontmatter reader/writer. Nothing else: this crate defines bytes, not behaviour.
+serde_norway = "0.9"
+
+[lints]
+workspace = true
