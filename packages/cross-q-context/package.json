@@ -20,6 +20,10 @@
     "./runtime": {
       "types": "./dist/runtime/index.d.ts",
       "default": "./dist/runtime/index.js"
+    },
+    "./codegen": {
+      "types": "./src/runtime/definitions/codegen/generate-types.ts",
+      "default": "./src/runtime/definitions/codegen/generate-types.ts"
     }
   },
   "imports": {
