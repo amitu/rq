@@ -9,8 +9,13 @@ import { createVisualizer } from './visualizer.js';
 // Mirrors the helper in packages/variables/src/substitute-templates.ts so the
 // script API and URL/param substitution read variables the same way (ADR-024).
 // ---------------------------------------------------------------------------
+// `localValue` is typed as possibly-absent and guarded, matching the Safe engine's `effective`
+// (isolated-rq.ts). Every audited producer synthesizes `localValue: ''` so an absent one is not
+// currently reachable, but the unguarded form returned `undefined` here while Safe returned
+// `syncValue` — the same input reading differently per engine (RQ-5691). The guard removes the
+// divergence rather than relying on every future producer to keep synthesizing the field.
 function getEffectiveValue(data) {
-    return data.localValue !== '' ? data.localValue : data.syncValue;
+    return data.localValue !== undefined && data.localValue !== '' ? data.localValue : data.syncValue;
 }
 // ---------------------------------------------------------------------------
 // Type restoration — variable values are stored as strings (syncValue/localValue),

@@ -232,7 +232,14 @@ export interface StatusAssertions {
 
 export interface HaveAssertions {
   status(expected: number | string): void;
+  /** Presence-only arm — asserts the header exists (case-insensitive name lookup). */
   header(name: string): void;
+  /**
+   * Value arm (RQ-5663) — asserts the header exists AND its value matches EXACTLY: case-sensitive,
+   * untrimmed string equality. Verified against a live Postman run; see the implementation for the
+   * full semantics table.
+   */
+  header(name: string, value: string): void;
   body(expected: string): void;
   jsonBody(): void;
   jsonBody(path: string): void;
@@ -318,9 +325,25 @@ function createHttpAssertions(
         );
       }
     },
-    header(name: string): void {
-      const found = Object.keys(headers).some((k) => k.toLowerCase() === name.toLowerCase());
-      assertCondition(found, `Expected header "${name}" to be present`, negate);
+    // Postman's `pm.response.to.have.header(name[, value])` takes an OPTIONAL second argument that
+    // asserts the header's VALUE (RQ-5663). Dropping it made the assertion strictly more lenient
+    // than Postman's, so a should-fail migrated test went green — the same silent pass↔fail failure
+    // mode as `to.have.body`. Semantics below are from a live Postman run (PostmanRuntime 7.54.0):
+    //   - header NAME lookup is case-INsensitive
+    //   - header VALUE compare is case-SENSITIVE, exact, and NOT trimmed
+    //   - presence is asserted BEFORE the value
+    //   - negation applies to PRESENCE ONLY — the value argument is ignored on the `.not` arm.
+    header(name: string, ...rest: [] | [string]): void {
+      const found = Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase());
+      assertCondition(found !== undefined, `Expected header "${name}" to be present`, negate);
+
+      // `found === undefined` here means the negated presence arm passed — the header is absent, so
+      // there is no value to compare.
+      if (rest.length === 0 || found === undefined) return;
+
+      const expected = rest[0];
+      const actual = headers[found];
+      assertCondition(actual === expected, `Expected header "${name}" to be "${expected}", got "${actual}"`, negate);
     },
     body(expected: string): void {
       // Postman's `pm.response.to.have.body(str)` asserts full string EQUALITY,
