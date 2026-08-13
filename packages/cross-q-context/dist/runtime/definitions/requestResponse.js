@@ -174,9 +174,24 @@ function createHttpAssertions(status, statusText, headers, body, negate, libs) {
                 assertCondition(statusText.toLowerCase() === expected.toLowerCase(), `Expected statusText "${expected}", got "${statusText}"`, negate);
             }
         },
-        header(name) {
-            const found = Object.keys(headers).some((k) => k.toLowerCase() === name.toLowerCase());
-            assertCondition(found, `Expected header "${name}" to be present`, negate);
+        // Postman's `pm.response.to.have.header(name[, value])` takes an OPTIONAL second argument that
+        // asserts the header's VALUE (RQ-5663). Dropping it made the assertion strictly more lenient
+        // than Postman's, so a should-fail migrated test went green — the same silent pass↔fail failure
+        // mode as `to.have.body`. Semantics below are from a live Postman run (PostmanRuntime 7.54.0):
+        //   - header NAME lookup is case-INsensitive
+        //   - header VALUE compare is case-SENSITIVE, exact, and NOT trimmed
+        //   - presence is asserted BEFORE the value
+        //   - negation applies to PRESENCE ONLY — the value argument is ignored on the `.not` arm.
+        header(name, ...rest) {
+            const found = Object.keys(headers).find((k) => k.toLowerCase() === name.toLowerCase());
+            assertCondition(found !== undefined, `Expected header "${name}" to be present`, negate);
+            // `found === undefined` here means the negated presence arm passed — the header is absent, so
+            // there is no value to compare.
+            if (rest.length === 0 || found === undefined)
+                return;
+            const expected = rest[0];
+            const actual = headers[found];
+            assertCondition(actual === expected, `Expected header "${name}" to be "${expected}", got "${actual}"`, negate);
         },
         body(expected) {
             // Postman's `pm.response.to.have.body(str)` asserts full string EQUALITY,

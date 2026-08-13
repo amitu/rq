@@ -100,7 +100,14 @@ export interface StatusAssertions {
 }
 export interface HaveAssertions {
     status(expected: number | string): void;
+    /** Presence-only arm — asserts the header exists (case-insensitive name lookup). */
     header(name: string): void;
+    /**
+     * Value arm (RQ-5663) — asserts the header exists AND its value matches EXACTLY: case-sensitive,
+     * untrimmed string equality. Verified against a live Postman run; see the implementation for the
+     * full semantics table.
+     */
+    header(name: string, value: string): void;
     body(expected: string): void;
     jsonBody(): void;
     jsonBody(path: string): void;

@@ -44,8 +44,13 @@ export type RawScopeMutations = {
 // script API and URL/param substitution read variables the same way (ADR-024).
 // ---------------------------------------------------------------------------
 
-function getEffectiveValue(data: { localValue: string; syncValue: string }): string {
-  return data.localValue !== '' ? data.localValue : data.syncValue;
+// `localValue` is typed as possibly-absent and guarded, matching the Safe engine's `effective`
+// (isolated-rq.ts). Every audited producer synthesizes `localValue: ''` so an absent one is not
+// currently reachable, but the unguarded form returned `undefined` here while Safe returned
+// `syncValue` — the same input reading differently per engine (RQ-5691). The guard removes the
+// divergence rather than relying on every future producer to keep synthesizing the field.
+function getEffectiveValue(data: { localValue?: string; syncValue: string }): string {
+  return data.localValue !== undefined && data.localValue !== '' ? data.localValue : data.syncValue;
 }
 
 // ---------------------------------------------------------------------------
