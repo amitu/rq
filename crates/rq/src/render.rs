@@ -1,0 +1,397 @@
+//! The `-- view --` section: response in, legible markdown out, rendered for a terminal.
+//!
+//! This is the feature the rest of the category doesn't have. Postman's visualizers live
+//! inside Postman; Newman and Bruno don't template at all. Rendering here means the output
+//! of an API call is something you can hand to a person who doesn't have your tooling.
+
+use anyhow::{Context, Result};
+use minijinja::{Environment, UndefinedBehavior};
+
+use crate::ui;
+
+/// Render a `-- view --` template against the run context.
+///
+/// Undefined names are an **error**, not an empty string: a template that silently renders
+/// "# open issues" because the field was renamed is worse than one that says so.
+pub fn render_view(template: &str, ctx: &serde_json::Value) -> Result<String> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.add_filter("date", date_filter);
+    env.add_template("view", template)
+        .context("the -- view -- template could not be parsed")?;
+    let tmpl = env.get_template("view")?;
+    let value = minijinja::Value::from_serialize(ctx);
+    tmpl.render(value)
+        .context("the -- view -- template could not be rendered")
+}
+
+/// `{{ created_at | date('YYYY-MM-DD') }}` for ISO-8601 input — the shape APIs actually
+/// return. Anything else passes through untouched rather than guessing.
+fn date_filter(value: String, format: Option<String>) -> String {
+    let fmt = format.unwrap_or_else(|| "YYYY-MM-DD".to_string());
+    let bytes = value.as_bytes();
+    let at = |range: std::ops::Range<usize>| -> Option<&str> {
+        if bytes.len() >= range.end && bytes[range.clone()].iter().all(|b| b.is_ascii_digit()) {
+            Some(&value[range])
+        } else {
+            None
+        }
+    };
+    let (Some(y), Some(mo), Some(d)) = (at(0..4), at(5..7), at(8..10)) else {
+        return value;
+    };
+    let (h, mi, s) = (
+        at(11..13).unwrap_or("00"),
+        at(14..16).unwrap_or("00"),
+        at(17..19).unwrap_or("00"),
+    );
+    fmt.replace("YYYY", y)
+        .replace("MM", mo)
+        .replace("DD", d)
+        .replace("HH", h)
+        .replace("mm", mi)
+        .replace("ss", s)
+}
+
+/// Render markdown for a terminal: headings, emphasis, code, lists, and — the one that
+/// matters — aligned tables.
+pub fn markdown_to_terminal(md: &str) -> String {
+    let mut out = String::new();
+    let lines: Vec<&str> = md.lines().collect();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim_start();
+
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            let mut block = Vec::new();
+            i += 1;
+            while i < lines.len() && !lines[i].trim_start().starts_with("```") {
+                block.push(lines[i]);
+                i += 1;
+            }
+            i += 1;
+            if !rest.trim().is_empty() {
+                out.push_str(&ui::dim(&format!("  {}\n", rest.trim())));
+            }
+            for b in block {
+                out.push_str(&ui::dim(&format!("  {b}")));
+                out.push('\n');
+            }
+            continue;
+        }
+
+        if trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.len() > 1 {
+            let mut rows = Vec::new();
+            while i < lines.len() {
+                let t = lines[i].trim();
+                if !(t.starts_with('|') && t.len() > 1) {
+                    break;
+                }
+                rows.push(t);
+                i += 1;
+            }
+            out.push_str(&render_table(&rows));
+            continue;
+        }
+
+        if let Some(rest) = heading(trimmed) {
+            out.push_str(&ui::bold(&inline(rest)));
+            out.push('\n');
+            i += 1;
+            continue;
+        }
+
+        if is_rule(trimmed) {
+            out.push_str(&ui::dim(
+                &"─".repeat(if ui::unicode() { 40 } else { 0 }).to_string(),
+            ));
+            if !ui::unicode() {
+                out.push_str(&ui::dim(&"-".repeat(40)));
+            }
+            out.push('\n');
+            i += 1;
+            continue;
+        }
+
+        if let Some(rest) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
+            let indent = line.len() - trimmed.len();
+            let bullet = if ui::unicode() { "•" } else { "-" };
+            out.push_str(&format!(
+                "{}{bullet} {}\n",
+                " ".repeat(indent),
+                inline(rest)
+            ));
+            i += 1;
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("> ") {
+            out.push_str(&format!("{} {}\n", ui::dim("│"), ui::italic(&inline(rest))));
+            i += 1;
+            continue;
+        }
+
+        out.push_str(&inline(line));
+        out.push('\n');
+        i += 1;
+    }
+    out
+}
+
+fn heading(line: &str) -> Option<&str> {
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ') {
+        Some(line[hashes + 1..].trim())
+    } else {
+        None
+    }
+}
+
+fn is_rule(line: &str) -> bool {
+    let t = line.trim();
+    t.len() >= 3 && (t.chars().all(|c| c == '-') || t.chars().all(|c| c == '*'))
+}
+
+/// A markdown table, column-aligned. The header separator row (`|---|---|`) is consumed,
+/// and its colons choose the alignment.
+fn render_table(rows: &[&str]) -> String {
+    let parse = |row: &str| -> Vec<String> {
+        row.trim()
+            .trim_start_matches('|')
+            .trim_end_matches('|')
+            .split('|')
+            .map(|c| c.trim().to_string())
+            .collect()
+    };
+    let is_separator = |cells: &[String]| {
+        !cells.is_empty()
+            && cells
+                .iter()
+                .all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':'))
+    };
+
+    let parsed: Vec<Vec<String>> = rows.iter().map(|r| parse(r)).collect();
+    let sep_at = parsed.iter().position(|c| is_separator(c));
+    let aligns: Vec<Align> = sep_at
+        .map(|i| parsed[i].iter().map(|c| Align::parse(c)).collect())
+        .unwrap_or_default();
+
+    let body: Vec<(bool, Vec<String>)> = parsed
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != sep_at)
+        .map(|(i, cells)| {
+            let is_header = sep_at.is_some_and(|s| i < s);
+            let rendered = cells
+                .iter()
+                .map(|c| {
+                    let text = inline(c);
+                    if is_header {
+                        ui::bold(&text)
+                    } else {
+                        text
+                    }
+                })
+                .collect();
+            (is_header, rendered)
+        })
+        .collect();
+
+    let columns = body.iter().map(|(_, c)| c.len()).max().unwrap_or(0);
+    let mut widths = vec![0usize; columns];
+    for (_, cells) in &body {
+        for (i, c) in cells.iter().enumerate() {
+            widths[i] = widths[i].max(ui::width(c));
+        }
+    }
+
+    let mut out = String::new();
+    for (is_header, cells) in &body {
+        let mut line = String::new();
+        for (i, cell) in cells.iter().enumerate() {
+            let pad = widths[i].saturating_sub(ui::width(cell));
+            let align = aligns.get(i).copied().unwrap_or(Align::Left);
+            if i > 0 {
+                line.push_str("  ");
+            }
+            match align {
+                Align::Right => {
+                    line.push_str(&" ".repeat(pad));
+                    line.push_str(cell);
+                }
+                Align::Center => {
+                    let left = pad / 2;
+                    line.push_str(&" ".repeat(left));
+                    line.push_str(cell);
+                    line.push_str(&" ".repeat(pad - left));
+                }
+                Align::Left => {
+                    line.push_str(cell);
+                    if i + 1 < cells.len() {
+                        line.push_str(&" ".repeat(pad));
+                    }
+                }
+            }
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
+        if *is_header {
+            let rule: String = widths
+                .iter()
+                .map(|w| "─".repeat(*w))
+                .collect::<Vec<_>>()
+                .join("  ");
+            let rule = if ui::unicode() {
+                rule
+            } else {
+                widths
+                    .iter()
+                    .map(|w| "-".repeat(*w))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            };
+            out.push_str(&ui::dim(&rule));
+            out.push('\n');
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Align {
+    Left,
+    Right,
+    Center,
+}
+
+impl Align {
+    fn parse(cell: &str) -> Align {
+        match (cell.starts_with(':'), cell.ends_with(':')) {
+            (true, true) => Align::Center,
+            (false, true) => Align::Right,
+            _ => Align::Left,
+        }
+    }
+}
+
+/// Inline markdown: `**bold**`, `*italic*`, `` `code` ``, `[text](url)`.
+fn inline(text: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '`' {
+            if let Some(end) = find(&chars, i + 1, '`') {
+                out.push_str(&ui::cyan(&chars[i + 1..end].iter().collect::<String>()));
+                i = end + 1;
+                continue;
+            }
+        }
+        if chars[i] == '*' && chars.get(i + 1) == Some(&'*') {
+            if let Some(end) = find_pair(&chars, i + 2) {
+                out.push_str(&ui::bold(&chars[i + 2..end].iter().collect::<String>()));
+                i = end + 2;
+                continue;
+            }
+        }
+        if chars[i] == '*' {
+            if let Some(end) = find(&chars, i + 1, '*') {
+                out.push_str(&ui::italic(&chars[i + 1..end].iter().collect::<String>()));
+                i = end + 1;
+                continue;
+            }
+        }
+        if chars[i] == '[' {
+            if let Some(close) = find(&chars, i + 1, ']') {
+                if chars.get(close + 1) == Some(&'(') {
+                    if let Some(paren) = find(&chars, close + 2, ')') {
+                        let label: String = chars[i + 1..close].iter().collect();
+                        let url: String = chars[close + 2..paren].iter().collect();
+                        out.push_str(&ui::underline(&label));
+                        out.push_str(&ui::dim(&format!(" ({url})")));
+                        i = paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn find(chars: &[char], from: usize, target: char) -> Option<usize> {
+    (from..chars.len()).find(|i| chars[*i] == target)
+}
+
+fn find_pair(chars: &[char], from: usize) -> Option<usize> {
+    (from..chars.len().saturating_sub(1)).find(|i| chars[*i] == '*' && chars[*i + 1] == '*')
+}
+
+/// What to print when a request has no `-- view --`: pretty JSON, or the body as it came.
+pub fn default_body(body: &str, json: Option<&serde_json::Value>) -> String {
+    match json {
+        Some(v) => serde_json::to_string_pretty(v).unwrap_or_else(|_| body.to_string()),
+        None => body.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_a_view_template() {
+        let ctx = serde_json::json!({ "response": [{"n": 1}, {"n": 2}], "status": 200 });
+        let out = render_view("{{ response | length }} rows, {{ status }}", &ctx).unwrap();
+        assert_eq!(out, "2 rows, 200");
+    }
+
+    #[test]
+    fn an_undefined_field_is_an_error_not_a_blank() {
+        let ctx = serde_json::json!({ "response": {} });
+        let err = render_view("{{ response.nope.deeper }}", &ctx).unwrap_err();
+        assert!(err.to_string().contains("could not be rendered"), "{err}");
+    }
+
+    #[test]
+    fn date_filter_handles_iso_and_passes_through_the_rest() {
+        assert_eq!(
+            date_filter("2024-08-12T09:30:00Z".into(), None),
+            "2024-08-12"
+        );
+        assert_eq!(
+            date_filter(
+                "2024-08-12T09:30:00Z".into(),
+                Some("DD/MM/YYYY HH:mm".into())
+            ),
+            "12/08/2024 09:30"
+        );
+        assert_eq!(date_filter("last tuesday".into(), None), "last tuesday");
+    }
+
+    #[test]
+    fn aligns_table_columns() {
+        let md = "| # | Title |\n|---|---|\n| 1287 | feat: shell mode |\n| 5 | bug |\n";
+        let out = markdown_to_terminal(md);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "#     Title");
+        assert_eq!(lines[2], "1287  feat: shell mode");
+        assert_eq!(lines[3], "5     bug");
+    }
+
+    #[test]
+    fn renders_headings_lists_and_inline_marks() {
+        let out = markdown_to_terminal("# Title\n\n- one `code`\n- **two**\n");
+        assert!(out.starts_with("Title\n"), "{out}");
+        assert!(out.contains("one code"), "{out}");
+        assert!(out.contains("two"), "{out}");
+    }
+}
