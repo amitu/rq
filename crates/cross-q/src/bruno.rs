@@ -68,6 +68,9 @@ struct DictEntry {
     enabled: bool,
     /// Bruno type annotation: "number" | "boolean" | "object" | "string" (empty = string).
     data_type: String,
+    /// A trailing `@contentType(…)` — Bruno's per-field media type on multipart and body
+    /// dictionaries. Carried so it survives the round trip.
+    content_type: Option<String>,
     description: Option<String>,
     secret: bool,
 }
@@ -125,23 +128,39 @@ impl Block<'_> {
                 Some((k, v)) => (k.trim().to_string(), v.trim()),
                 None => (rest.trim().to_string(), ""),
             };
-            // A `'''` opens a multiline value that runs until the next line that is `'''`.
+            // A `'''` opens a multiline value that runs to the next line *starting* with
+            // `'''`. That closing line may carry a trailing annotation
+            // (`''' @contentType(application/json)`) — requiring the whole line to equal
+            // `'''` is how this used to run off the end and swallow the rest of the block
+            // into one value.
+            let mut content_type = None;
             let value = if valpart == "'''" {
                 let mut buf = Vec::new();
-                while i < self.lines.len() && self.lines[i].trim() != "'''" {
+                while i < self.lines.len() && !self.lines[i].trim_start().starts_with("'''") {
                     buf.push(self.lines[i]);
                     i += 1;
                 }
-                i += 1; // consume the closing '''
+                if i < self.lines.len() {
+                    let closing = self.lines[i].trim_start();
+                    content_type = trailing_content_type(&closing[3..]).map(|(ct, _)| ct);
+                    i += 1; // consume the closing '''
+                }
                 dedent(&buf)
             } else {
-                strip_triple(valpart).to_string()
+                match trailing_content_type(valpart) {
+                    Some((ct, rest)) => {
+                        content_type = Some(ct);
+                        strip_triple(rest).to_string()
+                    }
+                    None => strip_triple(valpart).to_string(),
+                }
             };
             out.push(DictEntry {
                 key,
                 value,
                 enabled,
                 data_type: std::mem::take(&mut pending_type),
+                content_type,
                 description: pending_desc.take(),
                 secret: false,
             });
@@ -217,6 +236,20 @@ fn dedent(lines: &[&str]) -> String {
 }
 
 /// Strip surrounding `'''…'''` (single-line multiline) or `'…'` quoting from a dict value.
+/// Split a trailing `@contentType(…)` off a dictionary value, returning the media type and
+/// what remains. Only a well-formed suffix counts — and `file: @file(x.png)` is a *value*,
+/// not an annotation, so anything that isn't literally `@contentType(` is left alone.
+fn trailing_content_type(value: &str) -> Option<(String, &str)> {
+    let trimmed = value.trim_end();
+    let rest = trimmed.strip_suffix(')')?;
+    let at = rest.rfind("@contentType(")?;
+    let media = &rest[at + "@contentType(".len()..];
+    if media.contains(')') {
+        return None; // that ')' closed something else
+    }
+    Some((media.trim().to_string(), trimmed[..at].trim_end()))
+}
+
 fn strip_triple(s: &str) -> &str {
     if let Some(inner) = s.strip_prefix("'''").and_then(|x| x.strip_suffix("'''")) {
         inner
@@ -835,11 +868,23 @@ fn raw_body(blocks: &[Block<'_>], tag: &str, media_type: &str) -> Option<Body> {
 }
 
 fn kv_fields(b: &Block<'_>) -> Vec<KeyValue> {
-    b.dict()
+    b.entries()
         .into_iter()
-        .map(|(k, v, enabled)| KeyValue {
-            enabled,
-            ..KeyValue::new(k, v)
+        .map(|e| {
+            let mut kv = KeyValue {
+                enabled: e.enabled,
+                description: e.description,
+                ..KeyValue::new(e.key, e.value)
+            };
+            // A per-field media type is Bruno's own idea — no first-class home in the
+            // model, so it rides in the ext bag and is re-emitted on the way back.
+            if let Some(ct) = e.content_type {
+                kv.ext.insert(
+                    SourceFormat::Bruno,
+                    serde_json::json!({ "contentType": ct }),
+                );
+            }
+            kv
         })
         .collect()
 }
@@ -1270,5 +1315,101 @@ body:json {
             }
             _ => panic!("expected raw body"),
         }
+    }
+
+    /// The bug this parser used to have: a multiline value's closing delimiter can carry a
+    /// trailing annotation, and matching the line exactly ran off the end of the block —
+    /// swallowing every following entry into one value.
+    #[test]
+    fn multiline_values_close_on_an_annotated_delimiter() {
+        let src = concat!(
+            "meta {\n  name: multipart\n  type: http\n}\n\n",
+            "post {\n  url: {{host}}\n  body: multipartForm\n  auth: none\n}\n\n",
+            "body:multipart-form {\n",
+            "  foo: {\"bar\":\"baz\"} @contentType(application/json--test)\n",
+            "  multiline: '''\n",
+            "    \"multiline-test\"\n",
+            "  ''' @contentType(application/json--multiline--test)\n",
+            "  plain: {{a-var}}\n",
+            "  file: @file(bruno.png)\n",
+            "}\n"
+        );
+        let mut report = Report::new(Fidelity::Lossless);
+        let req = parse_bru_request(src, &mut report).unwrap();
+        let Protocol::Http(http) = &req.protocol else {
+            panic!("expected http");
+        };
+        let Some(Body::FormData { fields }) = &http.body else {
+            panic!("expected multipart body, got {:?}", http.body);
+        };
+        let text: Vec<&KeyValue> = fields
+            .iter()
+            .map(|f| match f {
+                cq_model::FormField::Text(kv) => kv,
+                other => panic!("expected text field, got {other:?}"),
+            })
+            .collect();
+
+        // Every entry after the multiline one survived as its own field.
+        assert_eq!(
+            text.iter().map(|k| k.key.as_str()).collect::<Vec<_>>(),
+            vec!["foo", "multiline", "plain", "file"]
+        );
+        assert_eq!(text[1].value, "\"multiline-test\"");
+        // The trailing annotation is captured, not glued onto the value.
+        assert_eq!(text[0].value, "{\"bar\":\"baz\"}");
+        assert_eq!(content_type_of(text[0]), Some("application/json--test"));
+        assert_eq!(
+            content_type_of(text[1]),
+            Some("application/json--multiline--test")
+        );
+        // `@file(…)` is a value, not an annotation: it must survive untouched.
+        assert_eq!(text[3].value, "@file(bruno.png)");
+        assert_eq!(content_type_of(text[3]), None);
+    }
+
+    fn content_type_of(kv: &KeyValue) -> Option<&str> {
+        kv.ext
+            .get(&SourceFormat::Bruno)?
+            .get("contentType")?
+            .as_str()
+    }
+
+    /// Both halves of the export gap: a value with newlines has to go back out as a
+    /// multiline block, and `settings { encodeUrl }` has to be written at all.
+    #[test]
+    fn multiline_values_and_settings_survive_the_export() {
+        let src = concat!(
+            "meta {\n  name: r\n  type: http\n}\n\n",
+            "post {\n  url: {{host}}\n  body: multipartForm\n  auth: none\n}\n\n",
+            "body:multipart-form {\n",
+            "  multiline: '''\n    line one\n    line two\n  ''' @contentType(text/plain)\n",
+            "}\n\n",
+            "settings {\n  encodeUrl: false\n}\n"
+        );
+        let mut report = Report::new(Fidelity::Lossless);
+        let ir1 = parse_bru_request(src, &mut report).unwrap();
+        let reemitted = crate::emit_bruno::emit_request(&ir1);
+
+        assert!(reemitted.contains("encodeUrl: false"), "{reemitted}");
+        assert!(
+            reemitted.contains("@contentType(text/plain)"),
+            "{reemitted}"
+        );
+
+        let ir2 = parse_bru_request(&reemitted, &mut report).unwrap();
+        assert_eq!(ir1, ir2, "re-emitted:\n{reemitted}");
+    }
+
+    #[test]
+    fn a_trailing_annotation_is_only_taken_when_it_is_one() {
+        assert_eq!(
+            trailing_content_type("v @contentType(text/csv)"),
+            Some(("text/csv".to_string(), "v"))
+        );
+        // A value that merely mentions it, or is itself a `@file(…)`, is left alone.
+        assert_eq!(trailing_content_type("@file(a.png)"), None);
+        assert_eq!(trailing_content_type("plain value"), None);
+        assert_eq!(trailing_content_type("{\"a\":\"@contentType(x)\"}"), None);
     }
 }

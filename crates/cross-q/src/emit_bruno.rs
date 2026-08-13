@@ -134,6 +134,12 @@ pub fn emit_request(req: &Request) -> String {
         s.push('\n');
         s.push_str(&block);
     }
+    // Bruno's `settings` block. Only written when it differs from the default, so an
+    // ordinary request doesn't grow a block it never had — but never skipped when it does,
+    // which is how `encodeUrl: false` used to be lost on export.
+    if !http.settings.encode_url {
+        s.push_str("\nsettings {\n  encodeUrl: false\n}\n");
+    }
     emit_behavior(&mut s, &req.behavior);
     emit_scripts(&mut s, &req.scripts);
     if let Some(desc) = &req.meta.description {
@@ -244,7 +250,26 @@ fn kv_block(name: &str, kvs: &[KeyValue]) -> String {
             let _ = writeln!(s, "  @description('''{desc}''')");
         }
         let dis = if kv.enabled { "" } else { "~" };
-        let _ = writeln!(s, "  {dis}{}: {}", kv.key, kv.value);
+        // Bruno's per-field media type, if the importer found one (see `bruno::kv_fields`).
+        let annotation = kv
+            .ext
+            .get(&cq_model::SourceFormat::Bruno)
+            .and_then(|e| e.get("contentType"))
+            .and_then(|c| c.as_str())
+            .map(|c| format!(" @contentType({c})"))
+            .unwrap_or_default();
+
+        if kv.value.contains('\n') {
+            // A value with newlines has to go back out as a `'''` block, or re-reading the
+            // file would see each line as another entry.
+            let _ = writeln!(s, "  {dis}{}: '''", kv.key);
+            for line in kv.value.lines() {
+                let _ = writeln!(s, "    {line}");
+            }
+            let _ = writeln!(s, "  '''{annotation}");
+        } else {
+            let _ = writeln!(s, "  {dis}{}: {}{annotation}", kv.key, kv.value);
+        }
     }
     s.push_str("}\n");
     s
