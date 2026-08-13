@@ -1,0 +1,277 @@
+# The `rq` file format
+
+> One Markdown file per request. Frontmatter for the structured bits, named sections for
+> everything that is prose or code. This is the format the `rq` CLI reads and writes.
+>
+> It is **not** the Requestly `LOCAL_FS` tree — that format splits a request across a dozen
+> JSON files and is specified in [`FORMAT.md`](./FORMAT.md). `rq` uses the single-file form
+> that `FORMAT.md` §10 describes as the north star; this document is that form, made real.
+
+---
+
+## 1. A request
+
+```markdown
+---
+method: GET
+url: https://api.github.com/repos/{{owner}}/{{repo}}/issues
+headers:
+  Accept: application/vnd.github+json
+  Authorization: Bearer {{GH_TOKEN}}
+query:
+  state: open
+  per_page: 5
+vars:
+  owner: { default: anthropics, prompt: "Repository owner" }
+  repo: { default: claude-code }
+  GH_TOKEN: { env: GH_TOKEN, secret: true, required: true }
+parents: []
+---
+
+-- description --
+
+List open issues for a repository.
+
+-- view --
+
+# {{ response | length }} open issues in **{{ vars.owner }}/{{ vars.repo }}**
+
+| # | Title | Author |
+|---|---|---|
+{% for i in response %}| #{{ i.number }} | {{ i.title }} | @{{ i.user.login }} |
+{% endfor %}
+
+-- post --
+
+rq.test('200 OK', () => rq.response.status === 200);
+```
+
+Everything about one request, top to bottom, in a file you can `cat`, `git diff`, and
+hand-edit. `rq e <name>` opens it in `$EDITOR`.
+
+---
+
+## 2. Frontmatter
+
+Required: `url`. Everything else is optional.
+
+| Key | Type | Meaning |
+|---|---|---|
+| `method` | string | HTTP verb. Default `GET`. |
+| `url` | string | The URL, templates intact. |
+| `headers` | map | Request headers, in file order. |
+| `query` | map | Query parameters, appended to the URL and percent-encoded. |
+| `path_vars` | map | Fills `{name}` and `:name` placeholders in the URL. |
+| `vars` | map | Declared inputs — see §4. |
+| `capture` | map | Variables extracted from **this** response for dependents — see §5. |
+| `parents` | list | Requests that must run first — see §5. |
+| `auth` | map | See §3. |
+| `form` | map | `application/x-www-form-urlencoded` body. |
+| `form_data` | map | `multipart/form-data` body; a value of `@path` is a file part. |
+| `file` | string | Send this file as the whole body. |
+| `body_type` | string | Media type for the `-- body --` section. `json`, `xml`, `text/csv`, … |
+| `timeout` | number | Milliseconds for the whole request. `0` = no limit. |
+| `follow_redirects` | bool | Default `true`. |
+| `verify_tls` | bool | Default `true`. |
+
+**Reading rules.** Numbers and booleans where a string belongs are coerced and reported
+(`per_page: 5` → `"5"`). Keys `rq` doesn't know are **kept verbatim** and re-emitted on
+write, with a note and a did-you-mean — a file written by a newer `rq` survives an older
+one. Genuinely ambiguous input (a mapping where a scalar belongs) is an error.
+
+A request has **one** body. Declaring two (`form:` and a `-- body --` section, say) is an
+error rather than a guess.
+
+---
+
+## 3. Auth
+
+```yaml
+auth: { type: basic,   username: u, password: "{{PASSWORD}}" }
+auth: { type: bearer,  token: "{{TOKEN}}" }         # sends "Bearer <token>"
+auth: { type: bearer,  token: "{{TOKEN}}", prefix: null }   # sends the bare token
+auth: { type: api_key, key: X-Api-Key, value: "{{KEY}}", in: header }   # or in: query
+auth: inherit    # explicitly take the enclosing collection's auth (the default)
+auth: none
+```
+
+`prefix` is tri-state on purpose: absent = `Bearer`, a string = that string, `null` = no
+prefix at all. Collapsing it silently changes what goes on the wire.
+
+An auth type this build can't send (`oauth_2`, `hawk`, …) is **preserved in the file** and
+reported on the run — a credential is never stripped just because it wasn't understood.
+
+An explicit `Authorization` header always wins over generated auth.
+
+---
+
+## 4. Variables
+
+`{{name}}` anywhere in the url, headers, query, path vars, or body. Resolution order,
+highest first — first write wins:
+
+```
+--var (command line)  >  capture (from a parent)  >  active environment
+                      >  __global  >  declared defaults (request, then collection)
+```
+
+A declared variable says where its value comes from:
+
+```yaml
+vars:
+  owner: anthropics                                   # shorthand for { default: … }
+  repo:     { default: claude-code, prompt: "Repo" }
+  GH_TOKEN: { env: GH_TOKEN, secret: true, required: true }
+```
+
+- `default` — used when nothing above supplies a value.
+- `prompt` — the label to ask with. `rq r x --prompt` asks for every declared variable.
+- `env` — read this process environment variable when no higher scope has a value.
+- `secret` — never echoed when prompted, and masked in `--show request` and in printed
+  output.
+- `required` — the run fails rather than sending an empty value.
+
+An unresolved `{{name}}` is **left exactly as written** and reported. A request that goes
+out with a literal `{{token}}` is a visible bug; one that goes out with an empty header is
+a mystery. `--strict` turns any such note into a non-zero exit.
+
+---
+
+## 5. Chaining — `parents:` and `capture:`
+
+```yaml
+# login/__metadata.md
+method: POST
+url: https://api.example.com/auth/login
+capture:
+  token: response.access_token
+```
+
+```yaml
+# me/__metadata.md
+url: https://api.example.com/me
+headers:
+  Authorization: Bearer {{token}}
+parents: [login]
+```
+
+`rq r me` runs `login` first, captures `token` from its response, and uses it. The graph is
+declared per request — no orchestration file, no `run.sh`. A parent shared by two children
+runs once per invocation. Cycles are refused, with the cycle printed.
+
+A bare name resolves to the sibling request first, then outward through the enclosing
+collections, then across the project.
+
+`capture:` values are paths into the same context a `-- view --` template sees (§7):
+`response.access_token`, `response.items[0].id`, `headers.etag`, `status`.
+
+---
+
+## 6. Sections
+
+`-- name --` on a line of its own opens a section; it runs to the next marker or the end of
+the file. A markdown rule (`---`) or an em-dash sentence is never mistaken for one.
+
+| Section | What it is |
+|---|---|
+| `-- description --` | Free markdown, for your future self. |
+| `-- view --` | The response render template (§7). |
+| `-- body --` | The request body — raw text, JSON, XML, GraphQL. |
+| `-- pre --` | JavaScript to run before the request. **Not executed by this build.** |
+| `-- post --` | JavaScript to run after. **Not executed by this build.** |
+| `-- form --` | Reserved for terminal input forms. Not implemented. |
+
+Unknown sections are preserved verbatim, like unknown frontmatter keys.
+
+**Scripts.** `-- pre --` and `-- post --` are parsed, carried, and round-tripped, but this
+build has no script runtime: every run that has one says so, and `--strict` fails. The
+runtime is [`cross-q-context`](./CONTEXT.md), landing next. Scripts imported from Postman
+keep their `pm.*` source **verbatim** with the dialect noted — a textual `pm.` → `rq.`
+rename imports clean and throws at run time, which is the one failure this project refuses
+to ship.
+
+---
+
+## 7. The `-- view --` template
+
+Jinja-compatible (via minijinja). The context:
+
+| Name | What |
+|---|---|
+| `response` | The parsed JSON body, or the raw text when it isn't JSON. |
+| `status` / `status_text` | `200` / `OK`. |
+| `headers` | Response headers, keys lowercased. |
+| `body` | The raw response text. |
+| `time_ms`, `bytes` | Elapsed time and body size. |
+| `vars` | Every resolved variable. |
+| `request` | `{ method, url }` as sent. |
+
+Filters: everything minijinja ships, plus `date('YYYY-MM-DD')` for ISO-8601 timestamps
+(`HH`, `mm`, `ss` too; non-ISO input passes through untouched).
+
+**An undefined name is an error, not an empty string.** A template that silently renders
+`# open issues` because a field was renamed is worse than one that says what broke.
+
+The result is markdown, rendered for the terminal: headings, emphasis, code, lists, and
+column-aligned tables. `--raw` prints the response body instead.
+
+---
+
+## 8. The project
+
+```
+my-apis/
+├── __requestly.json          # project marker: { version, include[], exclude[] }
+├── apis/
+│   ├── issues/__metadata.md  # a request
+│   └── github/               # a collection — just a directory
+│       ├── __collection.md   # optional: shared headers / auth / vars / description
+│       ├── login/__metadata.md
+│       └── me/__metadata.md
+├── environments/
+│   ├── __global.md
+│   └── staging.md
+└── .requestly/state.json     # the active environment (machine-local, gitignored)
+```
+
+`rq` finds the project the way `git` finds a repo: walk up from the cwd looking for
+`__requestly.json`. `RQ_PROJECT` and `--project <dir>` override that.
+
+**The tree is the hierarchy.** A request's collection is the directory above it; nothing
+stores a parent id, so `git mv` is a legal way to reorganize. `__`-prefixed directories are
+`rq`'s own and are never entities.
+
+`__collection.md` uses the same frontmatter, and its `headers`, `auth`, and `vars` are
+inherited by every request beneath it — nearer collections win, and a request always wins
+over its collections.
+
+**Environments** are the same document with only a `vars:` block, so there is one format to
+learn. `__global.md` is the global environment; it applies under whichever environment is
+active.
+
+```markdown
+---
+vars:
+  host: https://staging.example.com
+  TOKEN: { env: STAGING_TOKEN, secret: true }
+---
+```
+
+---
+
+## 9. Not implemented yet
+
+Named so you don't have to discover it:
+
+- **Scripts** (`-- pre --` / `-- post --`) parse and round-trip, but do not execute.
+- **`-- form --`** is reserved; nothing reads it.
+- **Post-run navigation** (the DevTools-style panel) — `--show request|headers|timing|vars`
+  prints the same information non-interactively today.
+- **Per-phase timings** (DNS / TCP / TLS / waiting) — only total elapsed time is measured.
+- **Terminal-width-aware tables** — columns are aligned to their content, so a table with
+  very long cells is wider than an 80-column window and wraps. Nothing is truncated;
+  narrow the column in the template (`{{ i.title | truncate(60) }}`) if you want it short.
+- **Saved response examples**, cookie jars, and data-driven iteration.
+- Protocols other than HTTP. GraphQL imports as a JSON POST body.
+
+Everything in §§1–8 is real, tested, and on the wire.

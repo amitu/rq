@@ -13,8 +13,8 @@ Everything here is Rust, MIT-licensed, plain files, no telemetry, no account.
 |---|---|---|---|
 | [`crates/cross-q`](crates) | `cq` | Convert API-client collections between formats (Postman ↔ Requestly ↔ Insomnia ↔ Bruno ↔ HAR ↔ OpenAPI ↔ cURL) through one idealised model, and report everything it couldn't carry cleanly. | 🏗️ building |
 | `crates/cq-model` | — | The **Idealised Model** — the canonical intermediate representation every importer and exporter maps through. | ✅ v0.1 |
-| `crates/cross-q-context` | `@cross-q/context` (npm), `cross-q-context` (PyPI + crate) | A QuickJS-based runtime that executes pre-request / post-response scripts against the `rq.*` API, backward-compatible with Postman's `pm.*`. | 🔜 planned |
-| `crates/rq` | `rq` | The CLI: named requests, declared chaining, responses rendered as legible markdown. | 🔜 planned |
+| `crates/cq-transform` + [`packages/cross-q-context`](packages/cross-q-context) | `@requestly/cross-q-context` (npm) | The scripting core: rewrite every dialect (`pm.*`, `postman.*`, `bru.*`) to the `rq.*` API (Rust/OXC → WASM), and execute it on a QuickJS runtime. | 🏗️ building |
+| [`crates/rq`](crates/rq) | `rq` | The CLI: named requests, declared chaining, responses rendered as legible markdown. | 🏗️ building |
 
 ## Supported formats
 
@@ -78,11 +78,36 @@ Two things keep this from becoming an N×M translation matrix:
   `pm.*`-compatible shims — not the converter. The converter carries source + dialect; the
   runtime reconciles them.
 
+## The `rq` CLI
+
+Curl in, named verb out, editor for everything else:
+
+```bash
+rq curl --save-as issues 'curl -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/anthropics/claude-code/issues?state=open"'
+
+rq r issues        # run it — anytime, from anywhere in the project
+rq e issues        # open it in $EDITOR
+rq l               # the tree: every request, its method, what it depends on
+```
+
+Each request is **one Markdown file** — frontmatter plus `-- description --`,
+`-- view --`, `-- body --`, `-- pre --`, `-- post --` sections. The `-- view --` template
+renders the response as markdown in your terminal, which is the thing no other client in
+this category does. Dependencies are declared per request (`parents: [login]`) and the
+values that flow between them are declared too (`capture: { token: response.access_token }`),
+so the common chain needs no JavaScript at all.
+
+Full spec: [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md). Scripts (`-- pre --` / `-- post --`)
+are parsed and round-tripped but **not yet executed** — every run that has one says so, and
+`--strict` fails on it. That runtime is `cross-q-context`, landing next.
+
 ## Docs
 
+- [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md) — the `rq` file format: the request document, the project, variables, chaining.
 - [`docs/cross-q.md`](docs/cross-q.md) — the cross-q converter: product + architecture.
 - [`docs/IDEALISED.md`](docs/IDEALISED.md) — the Idealised Model (the IR) in full.
-- [`docs/FORMAT.md`](docs/FORMAT.md) — the Requestly on-disk format `rq` reads and writes.
+- [`docs/FORMAT.md`](docs/FORMAT.md) — the Requestly `LOCAL_FS` on-disk format `cross-q` writes.
 - [`docs/CONTEXT.md`](docs/CONTEXT.md) — the `rq.*` scripting runtime spec.
 
 ## Build

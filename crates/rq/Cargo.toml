@@ -1,0 +1,40 @@
+[package]
+name = "rq"
+description = "A better curl, powered by collections — the git-native terminal API client."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "rq"
+path = "src/main.rs"
+
+[lib]
+name = "rq"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+# Maintained fork of the (archived) serde_yaml — the frontmatter reader/writer.
+serde_norway = "0.9"
+# The `-- view --` renderer. Jinja-compatible, pure Rust, no unsafe.
+minijinja = { version = "2", features = ["loader"] }
+# Blocking HTTP with rustls. No async runtime: `rq r` is one request at a time.
+ureq = { version = "3", features = ["json"] }
+# Secret-shaped prompts read without echo.
+rpassword = "7"
+# curl parsing + collection import, through the Idealised Model.
+cross-q = { path = "../cross-q" }
+cq-model = { path = "../cq-model" }
+cq-report = { path = "../cq-report" }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
