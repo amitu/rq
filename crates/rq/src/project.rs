@@ -26,13 +26,11 @@ use anyhow::{bail, Context, Result};
 
 use crate::doc::{Document, Note};
 
-pub const MARKER: &str = "__requestly.json";
-pub const REQUEST_FILE: &str = "__metadata.md";
-pub const COLLECTION_FILE: &str = "__collection.md";
-pub const APIS_DIR: &str = "apis";
-pub const ENVS_DIR: &str = "environments";
-pub const STATE_DIR: &str = ".requestly";
-pub const GLOBAL_ENV: &str = "__global";
+// The layout itself is defined in `rq-doc`, so the converter writes the same tree the CLI
+// reads. Re-exported here because this is where the rest of the CLI looks for it.
+pub use rq_doc::layout::{
+    APIS_DIR, COLLECTION_FILE, ENVS_DIR, GLOBAL_ENV, MARKER, REQUEST_FILE, STATE_DIR,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -130,7 +128,7 @@ impl Project {
             }
             let name = entry.file_name().to_string_lossy().to_string();
             // `__`-prefixed folders are rq's own (`__examples/`, `__scripts/`), never entities.
-            if name.starts_with('.') || name.starts_with("__") {
+            if rq_doc::layout::is_reserved_dir(&name) {
                 continue;
             }
             kids.push((name, entry.path()));
@@ -367,12 +365,7 @@ pub fn init(root: &Path) -> Result<bool> {
     }
     std::fs::create_dir_all(root.join(APIS_DIR))?;
     std::fs::create_dir_all(root.join(ENVS_DIR))?;
-    let body = serde_json::json!({
-        "version": "1",
-        "include": [],
-        "exclude": [],
-    });
-    std::fs::write(&marker, format!("{body:#}\n"))?;
+    std::fs::write(&marker, rq_doc::layout::marker())?;
 
     let gitignore = root.join(".gitignore");
     if !gitignore.exists() {
@@ -384,32 +377,9 @@ pub fn init(root: &Path) -> Result<bool> {
     Ok(true)
 }
 
-/// A filesystem-safe folder name for `--save-as`. Collections are directories, so a name
-/// with a slash in it nests — `rq curl --save-as github/issues` is a feature, not an error.
+/// A filesystem-safe folder name for `--save-as`, from the format crate.
 pub fn slug_path(name: &str) -> Result<String> {
-    let mut parts = Vec::new();
-    for raw in name.split('/') {
-        let seg: String = raw
-            .trim()
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        let seg = seg.trim_matches('-').to_string();
-        if seg.is_empty() || seg.starts_with("__") || seg == "." || seg == ".." {
-            bail!("`{name}` is not a usable request name");
-        }
-        parts.push(seg);
-    }
-    if parts.is_empty() {
-        bail!("a request name is required");
-    }
-    Ok(parts.join("/"))
+    rq_doc::layout::slug_path(name).map_err(|e| anyhow::anyhow!(e))
 }
 
 fn common_prefix(a: &str, b: &str) -> usize {
@@ -494,13 +464,5 @@ mod tests {
         assert_eq!(p.active_env(), None);
         p.set_active_env(Some("staging")).unwrap();
         assert_eq!(p.active_env().as_deref(), Some("staging"));
-    }
-
-    #[test]
-    fn slugs_keep_nesting_and_reject_traversal() {
-        assert_eq!(slug_path("github/issues").unwrap(), "github/issues");
-        assert_eq!(slug_path("My Request!").unwrap(), "My-Request");
-        assert!(slug_path("../etc").is_err());
-        assert!(slug_path("").is_err());
     }
 }

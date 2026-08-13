@@ -285,6 +285,7 @@ dependencies = [
  "clap",
  "cq-model",
  "cq-report",
+ "rq-doc",
  "serde",
  "serde_json",
  "tempfile",
@@ -988,11 +989,19 @@ dependencies = [
  "cross-q",
  "minijinja",
  "rpassword",
+ "rq-doc",
  "serde",
  "serde_json",
  "serde_norway",
  "tempfile",
  "ureq",
+]
+
+[[package]]
+name = "rq-doc"
+version = "0.1.0"
+dependencies = [
+ "serde_norway",
 ]
 
 [[package]]

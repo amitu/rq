@@ -15,6 +15,7 @@ Everything here is Rust, MIT-licensed, plain files, no telemetry, no account.
 | `crates/cq-model` | — | The **Idealised Model** — the canonical intermediate representation every importer and exporter maps through. | ✅ v0.1 |
 | `crates/cq-transform` + [`packages/cross-q-context`](packages/cross-q-context) | `@requestly/cross-q-context` (npm) | The scripting core: rewrite every dialect (`pm.*`, `postman.*`, `bru.*`) to the `rq.*` API (Rust/OXC → WASM), and execute it on a QuickJS runtime. | 🏗️ building |
 | [`crates/rq`](crates/rq) | `rq` | The CLI: named requests, declared chaining, responses rendered as legible markdown. | 🏗️ building |
+| [`crates/rq-doc`](crates/rq-doc) | — | The `rq` request document — one Markdown file per request — and the project layout around it. Read by the CLI, written by the converter. | ✅ v0.1 |
 
 ## Supported formats
 
@@ -30,7 +31,8 @@ holistic (all of a version's features in one go), not feature-by-feature.
 | **Postman** | Collection v2.0.0 | ✅ | 🔜 | object-shaped auth |
 | **Postman** | Collection v1.0.0 | ✅ | 🔜 | legacy flat `requests[]`/`folders[]` |
 | **cURL** | command line | ✅ | 🔜 | single command ↔ request |
-| **Requestly** | `LOCAL_FS` 1.12.0 | 🔜 | ✅ | the git-native on-disk tree |
+| **rq** | project (`__metadata.md`) | ✅ | ✅ | the format the `rq` CLI reads — one Markdown file per request; round-trip proven by IR-idempotence |
+| **Requestly** | `LOCAL_FS` 1.12.0 | 🔜 | ✅ | the app's split-JSON tree (`--to requestly`) |
 | **Requestly** | `MappedItems` (bulk-create) | — | ✅ | the app's in-memory import contract |
 | **Requestly** | export envelope 1.1.0 | 🔜 | 🔜 | single-file export |
 | **Bruno** | `.bru` v2 | ✅ | ✅ | text DSL — requests, folder tree, environments, inheritance; round-trip proven by IR-idempotence |
@@ -97,6 +99,10 @@ renders the response as markdown in your terminal, which is the thing no other c
 this category does. Dependencies are declared per request (`parents: [login]`) and the
 values that flow between them are declared too (`capture: { token: response.access_token }`),
 so the common chain needs no JavaScript at all.
+
+The format is a first-class cross-q citizen in both directions — `cq convert x.postman_collection.json --to rq`
+brings a collection in, and `cq convert ./my-apis --to bruno` takes it anywhere else — so
+`rq import` is that converter, not a second implementation of it.
 
 Full spec: [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md). Scripts (`-- pre --` / `-- post --`)
 are parsed and round-tripped but **not yet executed** — every run that has one says so, and

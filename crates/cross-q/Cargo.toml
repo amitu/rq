@@ -22,9 +22,11 @@ clap.workspace = true
 anyhow.workspace = true
 cq-model = { path = "../cq-model" }
 cq-report = { path = "../cq-report" }
+rq-doc = { path = "../rq-doc" }
 
 [dev-dependencies]
 tempfile.workspace = true
+rq-doc = { path = "../rq-doc" }
 serde_json.workspace = true
 
 [lints]

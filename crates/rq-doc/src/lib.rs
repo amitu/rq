@@ -35,9 +35,13 @@
 //!   are preserved verbatim and re-emitted on write, so a newer file edited by an older
 //!   `rq` comes back whole.
 
+pub mod layout;
+
 use std::fmt::Write as _;
 
-use serde_norway::{Mapping, Value};
+/// Re-exported because `AuthSpec::Other` carries a YAML mapping verbatim — a caller that
+/// builds or reads one needs these types, and should not have to pin the same YAML crate.
+pub use serde_norway::{Mapping, Value};
 
 /// A parsed request (or collection) document.
 #[derive(Clone, Debug, Default, PartialEq)]

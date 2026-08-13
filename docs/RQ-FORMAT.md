@@ -259,7 +259,37 @@ vars:
 
 ---
 
-## 9. Not implemented yet
+## 9. Converting in and out
+
+The format is one of cross-q's supported formats, not a private detail of the CLI, so it
+maps through the [Idealised Model](./IDEALISED.md) like every other:
+
+```bash
+cq convert acme.postman_collection.json --to rq  --output ./my-apis   # bring one in
+cq convert ./my-apis --to postman --output ./out                       # take it anywhere
+cq convert ./my-apis --to bruno   --output ./out
+cq convert ./my-apis --to requestly --output ./out   # the Requestly LOCAL_FS tree
+```
+
+A directory is detected as an `rq` project by its `__requestly.json` (or any
+`__metadata.md`); a lone `.md` file with frontmatter is read as a single request. `rq
+import` calls exactly this — the CLI owns no conversion of its own.
+
+Two gates hold the pair honest, both in `crates/cross-q/tests/rq_format.rs`:
+
+- **Idempotence** — `rq` → IR → `rq` → IR recovers the same model. If the emitter drops or
+  reshapes a field, the test names it.
+- **No hollow conversion** — over the pinned real-world Postman corpus, every request that
+  enters the model is still there after a trip through the `rq` format.
+
+What the format cannot yet hold is reported on the way out, per node: saved response
+examples, reusable script packages, disabled headers (there is no disabled flag), and
+non-HTTP protocols. An auth type the CLI can't *send* is still written to the file in full
+and read back whole — it is reported, never stripped.
+
+---
+
+## 10. Not implemented yet
 
 Named so you don't have to discover it:
 

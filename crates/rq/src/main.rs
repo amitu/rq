@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use rq::doc::Document;
-use rq::emit;
+use rq::import;
 use rq::project::{self, Kind, Project};
 use rq::render;
 use rq::run::{self, RunOptions};
@@ -516,7 +516,8 @@ fn save_curl(cli: &Cli, cwd: &Path, args: &CurlArgs) -> Result<i32> {
         rename_single_request(&mut ws, &rel)?;
     }
 
-    let out = emit::emit(&ws, &project.root)?;
+    let map = cross_q::emit_rq_md::to_rq_md(&ws, &mut report);
+    let written = import::write_project(&map, &project.root)?;
     if created {
         println!(
             "{} created collection {} (no project found — initialized one)",
@@ -524,8 +525,8 @@ fn save_curl(cli: &Cli, cwd: &Path, args: &CurlArgs) -> Result<i32> {
             ui::bold(&project.root.display().to_string())
         );
     }
-    for rel in &out.requests {
-        let reopened = Project::open(project.root.clone())?;
+    let reopened = Project::open(project.root.clone())?;
+    for rel in &written {
         let idx = reopened.resolve(rel)?;
         let (doc, _) = reopened.load(idx)?;
         println!(
@@ -536,22 +537,40 @@ fn save_curl(cli: &Cli, cwd: &Path, args: &CurlArgs) -> Result<i32> {
             short_url(doc.front.url.as_deref().unwrap_or(""))
         );
     }
-    report_notes(&report, &out.notes);
-    if let Some(rel) = out.requests.first() {
+    report_notes(&report);
+    if let Some(rel) = written.first() {
         println!("  run it: {}", ui::bold(&format!("rq r {rel}")));
     }
     Ok(0)
 }
 
 fn import(cli: &Cli, cwd: &Path, args: &ImportArgs) -> Result<i32> {
-    let content = std::fs::read_to_string(&args.file)
-        .with_context(|| format!("reading {}", args.file.display()))?;
+    // A directory is a collection tree (an rq project, a Bruno collection): it reaches the
+    // importer as a virtual-FS map, exactly as it does through `cq`.
+    let (content, detected) = if args.file.is_dir() {
+        let map = import::read_dir_map(&args.file)?;
+        let detected = if map.contains_key(project::MARKER)
+            || map.keys().any(|k| k.ends_with(project::REQUEST_FILE))
+        {
+            Some("rq")
+        } else if map.keys().any(|k| k.ends_with(".bru") || k == "bruno.json") {
+            Some("bruno")
+        } else {
+            None
+        };
+        (serde_json::to_string(&map)?, detected)
+    } else {
+        let text = std::fs::read_to_string(&args.file)
+            .with_context(|| format!("reading {}", args.file.display()))?;
+        let detected = import::detect_format(&args.file, &text);
+        (text, detected)
+    };
     let format = match &args.from {
         Some(f) => f.clone(),
-        None => emit::detect_format(&args.file, &content)
+        None => detected
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "could not tell what {} is — pass --from postman|bruno|curl",
+                    "could not tell what {} is — pass --from postman|bruno|curl|rq",
                     args.file.display()
                 )
             })?
@@ -561,7 +580,12 @@ fn import(cli: &Cli, cwd: &Path, args: &ImportArgs) -> Result<i32> {
     let (project, created) = open_or_init(cli, cwd)?;
     let mut report = cq_report::Report::new(cq_report::Fidelity::Lossless);
     let ws = cross_q::build_workspace(&format, &content, &mut report)?;
-    let out = emit::emit(&ws, &project.root)?;
+    let map = cross_q::emit_rq_md::to_rq_md(&ws, &mut report);
+    let written = import::write_project(&map, &project.root)?;
+    let environments = map
+        .keys()
+        .filter(|k| k.starts_with(&format!("{}/", project::ENVS_DIR)))
+        .count();
 
     if created {
         println!(
@@ -573,20 +597,20 @@ fn import(cli: &Cli, cwd: &Path, args: &ImportArgs) -> Result<i32> {
     println!(
         "{} imported {} request{} and {} environment{} from {} ({format})",
         ui::green(ui::tick()),
-        out.requests.len(),
-        plural(out.requests.len()),
-        out.environments.len(),
-        plural(out.environments.len()),
+        written.len(),
+        plural(written.len()),
+        environments,
+        plural(environments),
         args.file.display(),
     );
-    report_notes(&report, &out.notes);
+    report_notes(&report);
     println!("  see them: {}", ui::bold("rq l"));
     Ok(0)
 }
 
 /// Print what the conversion couldn't carry cleanly. A conversion that claims success
 /// while dropping data is the one unforgivable bug.
-fn report_notes(report: &cq_report::Report, notes: &[String]) {
+fn report_notes(report: &cq_report::Report) {
     let mut shown = 0usize;
     for d in &report.diagnostics {
         if matches!(
@@ -605,9 +629,6 @@ fn report_notes(report: &cq_report::Report, notes: &[String]) {
                 break;
             }
         }
-    }
-    for n in notes {
-        ui::note(n);
     }
 }
 

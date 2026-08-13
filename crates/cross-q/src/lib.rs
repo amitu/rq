@@ -10,8 +10,10 @@ pub mod curl;
 pub mod emit_bruno;
 pub mod emit_postman;
 pub mod emit_rq;
+pub mod emit_rq_md;
 pub mod mappeditems;
 pub mod postman;
+pub mod rq_md;
 pub mod rq_shape;
 
 pub use mappeditems::to_mapped_items;
@@ -73,7 +75,7 @@ pub fn curl_to_workspace(input: &str, report: &mut Report) -> Result<Workspace, 
 }
 
 /// Convert a curl command into a Requestly `LOCAL_FS` project at `out_dir`.
-pub fn convert_curl_to_rq(input: &str, out_dir: &Path) -> anyhow::Result<Report> {
+pub fn convert_curl_to_requestly(input: &str, out_dir: &Path) -> anyhow::Result<Report> {
     let mut report = Report::new(Fidelity::Lossless);
     let ws = curl_to_workspace(input, &mut report).map_err(|e| anyhow::anyhow!("{e}"))?;
     emit_rq::emit_rq(&ws, out_dir, &mut report)?;
@@ -81,7 +83,7 @@ pub fn convert_curl_to_rq(input: &str, out_dir: &Path) -> anyhow::Result<Report>
 }
 
 /// Convert a Postman collection (v2.0/v2.1) into a Requestly `LOCAL_FS` project.
-pub fn convert_postman_to_rq(input: &str, out_dir: &Path) -> anyhow::Result<Report> {
+pub fn convert_postman_to_requestly(input: &str, out_dir: &Path) -> anyhow::Result<Report> {
     let mut report = Report::new(Fidelity::Lossless);
     let ws = postman::parse_postman(input, &mut report).map_err(|e| anyhow::anyhow!("{e}"))?;
     emit_rq::emit_rq(&ws, out_dir, &mut report)?;
@@ -99,9 +101,10 @@ pub fn build_workspace(
         "curl" => curl_to_workspace(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         "postman" => postman::parse_postman(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         "bruno" => bruno::parse_bruno(input, report).map_err(|e| anyhow::anyhow!("{e}")),
+        "rq" => rq_md::parse_rq_md(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         other => {
             anyhow::bail!(
-                "not_implemented: source format {other:?} (supported: curl, postman, bruno)"
+                "not_implemented: source format {other:?} (supported: curl, postman, bruno, rq)"
             )
         }
     }
@@ -210,7 +213,7 @@ mod tests {
     #[test]
     fn end_to_end_curl_to_rq() {
         let dir = tempfile::tempdir().unwrap();
-        let report = convert_curl_to_rq(
+        let report = convert_curl_to_requestly(
             "curl -H 'Accept: application/json' https://api.example.com/v1/users",
             dir.path(),
         )
@@ -226,7 +229,7 @@ mod tests {
     #[test]
     fn missing_url_surfaces_as_error() {
         let dir = tempfile::tempdir().unwrap();
-        let err = convert_curl_to_rq("curl -X GET", dir.path());
+        let err = convert_curl_to_requestly("curl -X GET", dir.path());
         assert!(err.is_err());
     }
 }
