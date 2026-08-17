@@ -193,7 +193,7 @@ the file. A markdown rule (`---`) or an em-dash sentence is never mistaken for o
 | `-- body --` | The request body — raw text, JSON, XML, GraphQL. |
 | `-- pre --` | JavaScript to run before the request. **Not executed by this build.** |
 | `-- post --` | JavaScript to run after. **Not executed by this build.** |
-| `-- form --` | Reserved for terminal input forms. Not implemented. |
+| `-- form --` | The request's input fields (§6.1). |
 
 Unknown sections are preserved verbatim, like unknown frontmatter keys.
 
@@ -242,6 +242,40 @@ ran a collection's scripts with host access would be a liability rather than a f
 Scripts imported from Postman keep their `pm.*` source **verbatim** with the dialect noted —
 a textual `pm.` → `rq.` rename imports clean and throws at run time, which is the one
 failure this project refuses to ship.
+
+### 6.1 `-- form --` — what the request expects you to type
+
+A form is the same idea as `vars:` — values the request needs — declared for *typing into*
+rather than for defaulting. Same shape, so there is nothing new to learn:
+
+```markdown
+-- form --
+
+text:   { label: "What's happening?", required: true, multiline: true, help: "280 max" }
+author: { label: "Posting as", default: '{{me}}' }
+draft:  false
+```
+
+`label` · `default` (templates in it are resolved against the page you opened the form
+from) · `required` · `secret` (masked, never echoed) · `multiline` · `help`. A bare value
+is the short form for a default.
+
+Fields are ordinary variables once filled, so `{{text}}` works in the URL, the headers and
+the body like anything else.
+
+**Where the form appears:**
+
+- **In the console**, opening a link to a request that has one shows the form instead of
+  firing the request — a POST that happened because you looked at it would be a bug. `tab`
+  moves between fields, `enter` moves on and submits from the last one, `ctrl-s` submits
+  from anywhere, `esc` cancels. A link's own variables prefill matching fields and ride
+  along with the rest (`reply_to`, say, which the form never asks about).
+- **At the prompt**, a form field with no value is asked for, one line at a time — the same
+  path `vars: { prompt: … }` uses.
+- **In a script or CI**, `--var text=…` fills it and nothing is asked.
+
+A required field that is empty refuses to submit and says which one, with the form still
+holding everything you typed.
 
 ---
 
@@ -367,7 +401,6 @@ Named so you don't have to discover it:
 
 - **Scripts** (`-- pre --` / `-- post --`) parse and round-trip, but do not execute — the
   host side is built and tested (§6), the engine is not here yet.
-- **`-- form --`** is reserved; nothing reads it.
 - **The interactive project browser** — bare `rq` prints the tree; it doesn't yet let you
   arrow around it, run, or edit from there. (The *post-run* console is real: `rq r x -c`.)
 - **Terminal-width-aware tables** — columns are aligned to their content, so a table with

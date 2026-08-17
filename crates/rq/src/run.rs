@@ -182,7 +182,13 @@ pub fn run(
             v.mark_secret(key);
         }
 
-        let mut declared = doc.front.vars.clone();
+        // A `-- form --` field is a declared variable that expects to be typed in, so it
+        // goes first: the form is the most specific statement about what this request
+        // wants, and it is what the console fills in.
+        let mut declared = doc
+            .form_vars()
+            .map_err(|e| anyhow::anyhow!("{}: {e}", entry.rel))?;
+        declared.extend(doc.front.vars.clone());
         declared.extend(inherited.declared.clone());
         vars::resolve_declared(&mut v, &declared, opts.prompt, opts.interactive)
             .with_context(|| entry.rel.clone())?;

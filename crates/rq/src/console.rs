@@ -19,6 +19,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use crossterm::{cursor, execute, queue};
 
+use crate::doc::FormField;
 use crate::project::Project;
 use crate::render;
 use crate::run::{Run, RunOptions, Step};
@@ -78,6 +79,11 @@ pub struct Console<'a> {
     width: usize,
     /// A one-line report of the last thing that happened (or failed to).
     message: Option<String>,
+    /// The form being filled in, when there is one.
+    form: Option<FormState>,
+    /// Which link `enter` would open. Digits reach the first nine; this reaches all of
+    /// them, which matters the moment a page lists more than nine things.
+    link_cursor: usize,
 }
 
 impl<'a> Console<'a> {
@@ -94,6 +100,8 @@ impl<'a> Console<'a> {
             height: 24,
             width: 100,
             message: None,
+            form: None,
+            link_cursor: 0,
         }
     }
 
@@ -130,6 +138,23 @@ impl<'a> Console<'a> {
             return;
         };
 
+        // A request that declares a form is asking to be filled in, not fired. Running it
+        // here would try to prompt on a terminal this console is already drawing on.
+        let (name, vars) = crate::render::parse_target(&link.target);
+        let page_vars = self.run().vars.clone();
+        match form_of(nav.project, &name, &page_vars) {
+            Ok(Some(state)) => {
+                self.form = Some(state.seeded(vars));
+                self.message = Some(format!("→ {}", link.label.trim()));
+                return;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                self.message = Some(format!("{name}: {e:#}"));
+                return;
+            }
+        }
+
         match crate::run::follow(nav.project, link, nav.opts, nav.engine) {
             Ok(next) => {
                 self.history.truncate(self.cursor + 1);
@@ -139,11 +164,35 @@ impl<'a> Console<'a> {
                 self.pane = Pane::View;
                 self.scroll = 0;
                 self.message = Some(format!("→ {}", link.label.trim()));
+                self.link_cursor = 0;
             }
             // A link that fails is a page that didn't load, not a reason to lose the one
             // you were reading.
             Err(e) => self.message = Some(format!("{}: {e:#}", link.label.trim())),
         }
+    }
+
+    /// Move the link cursor. 0 means "none selected", which is where a fresh page starts.
+    pub fn select_link(&mut self, delta: isize) {
+        let count = self.run().links().len() as isize;
+        if count == 0 {
+            self.message = Some("this page has no links".into());
+            return;
+        }
+        let next = self.link_cursor as isize + delta;
+        self.link_cursor = if next < 1 {
+            count as usize
+        } else if next > count {
+            1
+        } else {
+            next as usize
+        };
+        self.message = self
+            .run()
+            .links()
+            .iter()
+            .find(|l| l.number == self.link_cursor)
+            .map(|l| format!("[{}] {}", l.number, l.label.trim()));
     }
 
     pub fn back(&mut self) {
@@ -152,6 +201,7 @@ impl<'a> Console<'a> {
             return;
         }
         self.cursor -= 1;
+        self.link_cursor = 0;
         self.step = self.run().steps.len().saturating_sub(1);
         self.pane = Pane::View;
         self.scroll = 0;
@@ -258,7 +308,9 @@ impl<'a> Console<'a> {
 
     fn footer(&self) -> String {
         let keys = if self.nav.is_some() && !self.run().links().is_empty() {
-            "1-9 follow · backspace back · ↑/↓ step · ←/→ pane · j/k scroll · q quit"
+            "tab/1-9 pick · enter open · backspace back · f form · ←/→ pane · q quit"
+        } else if self.nav.is_some() {
+            "f form · ↑/↓ step · ←/→ pane · j/k scroll · q quit"
         } else {
             "↑/↓ step · ←/→ pane · j/k scroll · q quit"
         };
@@ -270,6 +322,11 @@ impl<'a> Console<'a> {
 
     /// Apply one keypress. Returns `false` when the console should close.
     pub fn on_key(&mut self, key: KeyEvent) -> bool {
+        // A form owns the keyboard while it is open — otherwise typing "q" into a field
+        // would quit, which is the sort of thing you only forgive once.
+        if self.form.is_some() {
+            return self.on_form_key(key);
+        }
         let page = self.height.saturating_sub(8).max(1);
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
@@ -282,13 +339,26 @@ impl<'a> Console<'a> {
                 self.step = (self.step + 1).min(self.run().steps.len() - 1);
                 self.scroll = 0;
             }
-            KeyCode::Left | KeyCode::BackTab => {
+            KeyCode::Left => {
                 self.pane = step_pane(self.pane, -1);
                 self.scroll = 0;
             }
-            KeyCode::Right | KeyCode::Tab | KeyCode::Enter => {
+            KeyCode::Right => {
                 self.pane = step_pane(self.pane, 1);
                 self.scroll = 0;
+            }
+            // Tab through the links and open one with enter — the way you move through a
+            // page you can't reach with a single digit.
+            KeyCode::Tab => self.select_link(1),
+            KeyCode::BackTab => self.select_link(-1),
+            KeyCode::Enter => {
+                let selected = self.link_cursor;
+                if selected > 0 {
+                    self.follow(selected);
+                } else {
+                    self.pane = step_pane(self.pane, 1);
+                    self.scroll = 0;
+                }
             }
             // A digit opens that link — the console's whole reason to know about links.
             KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
@@ -306,6 +376,7 @@ impl<'a> Console<'a> {
             KeyCode::Char('b') => self.pane = Pane::Response,
             KeyCode::Char('h') => self.pane = Pane::Headers,
             KeyCode::Char('t') => self.pane = Pane::Timing,
+            KeyCode::Char('f') => self.open_form(),
             _ => {}
         }
         true
@@ -313,6 +384,21 @@ impl<'a> Console<'a> {
 
     /// One frame, as lines — separated from drawing so it can be tested without a terminal.
     pub fn frame(&self) -> Vec<String> {
+        if let Some(form) = &self.form {
+            let mut out = form.lines(self.width);
+            while out.len() + 2 < self.height {
+                out.push(String::new());
+            }
+            out.push(match &self.message {
+                Some(message) => format!(
+                    "{}  {}",
+                    ui::cyan(message),
+                    ui::dim("enter next · ctrl-s submit · esc cancel")
+                ),
+                None => ui::dim("enter next · ctrl-s submit · esc cancel"),
+            });
+            return out;
+        }
         let mut out = self.header();
         let body = self.body();
         let room = self.height.saturating_sub(out.len() + 2).max(1);
@@ -322,6 +408,265 @@ impl<'a> Console<'a> {
         out.push(self.footer());
         out
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Forms
+// ---------------------------------------------------------------------------------------
+
+/// A form being filled in. The values start from whatever the field declared, so a form is
+/// something you correct rather than something you type from nothing.
+pub struct FormState {
+    pub rel: String,
+    pub title: String,
+    pub fields: Vec<FormField>,
+    pub values: Vec<String>,
+    pub cursor: usize,
+    /// Variables the link carried that the form doesn't ask for — `reply_to`, say. They
+    /// are part of the submission even though nobody types them.
+    pub extra: Vec<(String, String)>,
+}
+
+impl FormState {
+    fn new(rel: String, title: String, fields: Vec<FormField>) -> FormState {
+        let values = fields
+            .iter()
+            .map(|f| f.default.clone().unwrap_or_default())
+            .collect();
+        FormState {
+            rel,
+            title,
+            fields,
+            values,
+            cursor: 0,
+            extra: Vec::new(),
+        }
+    }
+
+    /// Seed from what a link supplied: a matching field is prefilled, the rest ride along.
+    fn seeded(mut self, vars: Vec<(String, String)>) -> FormState {
+        for (key, value) in vars {
+            match self.fields.iter().position(|f| f.name == key) {
+                Some(i) => self.values[i] = value,
+                None => self.extra.push((key, value)),
+            }
+        }
+        self
+    }
+
+    /// The field values as variables for the request.
+    fn as_vars(&self) -> Vec<(String, String)> {
+        self.fields
+            .iter()
+            .zip(&self.values)
+            .map(|(f, v)| (f.name.clone(), v.clone()))
+            .collect()
+    }
+
+    fn missing(&self) -> Option<&FormField> {
+        self.fields
+            .iter()
+            .zip(&self.values)
+            .find(|(f, v)| f.required && v.trim().is_empty())
+            .map(|(f, _)| f)
+    }
+
+    fn lines(&self, width: usize) -> Vec<String> {
+        let mut out = vec![ui::bold(&self.title), String::new()];
+        let label_width = self
+            .fields
+            .iter()
+            .map(|f| f.title().chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(24);
+
+        for (i, (field, value)) in self.fields.iter().zip(&self.values).enumerate() {
+            let selected = i == self.cursor;
+            let marker = if selected {
+                ui::cyan(ui::arrow())
+            } else {
+                " ".to_string()
+            };
+            let shown = if field.secret {
+                "•".repeat(value.chars().count())
+            } else {
+                value.clone()
+            };
+            // The caret sits where typing would land.
+            let box_width = width.saturating_sub(label_width + 8).clamp(10, 60);
+            let visible: String = shown
+                .chars()
+                .rev()
+                .take(box_width.saturating_sub(1))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            let caret = if selected { "_" } else { "" };
+            let required = if field.required && value.trim().is_empty() {
+                ui::red(" *")
+            } else {
+                String::new()
+            };
+            out.push(format!(
+                "{marker} {:<label_width$}  {}{required}",
+                field.title(),
+                ui::underline(&format!("{visible}{caret}")),
+            ));
+            if let Some(help) = &field.help {
+                out.push(format!("  {:<label_width$}  {}", "", ui::dim(help)));
+            }
+        }
+        out
+    }
+}
+
+impl Console<'_> {
+    /// Open the form of the request on the current page, prefilled from its declarations.
+    pub fn open_form(&mut self) {
+        let Some(nav) = &self.nav else {
+            self.message = Some("this console has nothing to submit with".into());
+            return;
+        };
+        let rel = self.run().target().rel.clone();
+        let page_vars = self.run().vars.clone();
+        match form_of(nav.project, &rel, &page_vars) {
+            Ok(Some(state)) => {
+                self.form = Some(state);
+                self.message = None;
+            }
+            Ok(None) => self.message = Some(format!("`{rel}` has no -- form --")),
+            Err(e) => self.message = Some(format!("{rel}: {e:#}")),
+        }
+    }
+
+    pub fn close_form(&mut self) {
+        self.form = None;
+        self.message = None;
+    }
+
+    /// Run the request with what was typed, and make the result the next page.
+    pub fn submit_form(&mut self) {
+        let (Some(nav), Some(form)) = (&self.nav, &self.form) else {
+            return;
+        };
+        if let Some(field) = form.missing() {
+            self.message = Some(format!("{} is required", field.title()));
+            return;
+        }
+
+        let mut opts = nav.opts.clone();
+        for (key, value) in form.extra.iter().cloned().chain(form.as_vars()) {
+            opts.cli_vars.retain(|(k, _)| *k != key);
+            opts.cli_vars.push((key, value));
+        }
+        let rel = form.rel.clone();
+
+        let outcome = nav
+            .project
+            .resolve(&rel)
+            .and_then(|idx| crate::run::run(nav.project, idx, &opts, nav.engine));
+
+        match outcome {
+            Ok(next) => {
+                self.history.truncate(self.cursor + 1);
+                self.history.push(next);
+                self.cursor = self.history.len() - 1;
+                self.step = self.run().steps.len().saturating_sub(1);
+                self.pane = Pane::View;
+                self.scroll = 0;
+                self.form = None;
+                self.link_cursor = 0;
+                self.message = Some(format!("submitted {rel}"));
+            }
+            // The form stays open with what you typed still in it: losing a filled-in form
+            // to a failed request would be its own small tragedy.
+            Err(e) => self.message = Some(format!("{rel}: {e:#}")),
+        }
+    }
+
+    /// Keys while a form is open. Returns false when the console should close.
+    fn on_form_key(&mut self, key: KeyEvent) -> bool {
+        let Some(form) = &mut self.form else {
+            return true;
+        };
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.submit_form()
+            }
+            KeyCode::Esc => self.close_form(),
+            KeyCode::Up | KeyCode::BackTab => form.cursor = form.cursor.saturating_sub(1),
+            KeyCode::Down | KeyCode::Tab => {
+                form.cursor = (form.cursor + 1).min(form.fields.len().saturating_sub(1))
+            }
+            KeyCode::Enter => {
+                // Enter moves on, and submits from the last field — the shape a form has
+                // in every other program.
+                if form.cursor + 1 < form.fields.len() {
+                    form.cursor += 1;
+                } else {
+                    self.submit_form();
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(value) = form.values.get_mut(form.cursor) {
+                    value.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(value) = form.values.get_mut(form.cursor) {
+                    value.push(c);
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+}
+
+/// The form a request declares, if it declares one.
+/// Resolve `{{templates}}` in a form's defaults against the page you opened it from, so
+/// `default: '{{me}}'` shows *you* rather than showing you its own source code.
+///
+/// Masked secrets are left as written: substituting `***` into a field would be worse than
+/// leaving the template there, because you would submit the mask.
+fn resolve_defaults(fields: &mut [FormField], page_vars: &[(String, String, String)]) {
+    let mut vars = crate::vars::Vars::new();
+    vars.layer(
+        "page",
+        page_vars
+            .iter()
+            .filter(|(_, value, _)| value != "***")
+            .map(|(key, value, _)| (key.clone(), value.clone())),
+    );
+    for field in fields {
+        if let Some(default) = &field.default {
+            field.default = Some(crate::vars::substitute(default, &vars).text);
+        }
+    }
+}
+
+fn form_of(
+    project: &Project,
+    rel: &str,
+    page_vars: &[(String, String, String)],
+) -> Result<Option<FormState>> {
+    let Ok(idx) = project.resolve(rel) else {
+        return Ok(None);
+    };
+    let (doc, _) = project.load(idx)?;
+    let mut fields = doc.form().map_err(|e| anyhow::anyhow!("{e}"))?;
+    if fields.is_empty() {
+        return Ok(None);
+    }
+    resolve_defaults(&mut fields, page_vars);
+    let title = doc
+        .section("description")
+        .and_then(|d| d.lines().next().map(str::to_string))
+        .unwrap_or_else(|| rel.to_string());
+    Ok(Some(FormState::new(rel.to_string(), title, fields)))
 }
 
 fn step_pane(pane: Pane, delta: isize) -> Pane {

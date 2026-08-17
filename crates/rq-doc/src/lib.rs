@@ -968,3 +968,161 @@ rq.test('200 OK', () => rq.response.status === 200);
         assert!(notes.iter().any(|n| n.0.contains("description")));
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// The `-- form --` section
+// ---------------------------------------------------------------------------------------
+
+/// One field of a request's input form.
+///
+/// A form is the same idea as `vars:` — values the request needs — declared for *typing
+/// into* rather than for defaulting. That is the whole distinction: `vars:` says where a
+/// value comes from when you don't supply one, a form says this request expects you to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FormField {
+    pub name: String,
+    /// What to call it on screen. Defaults to the field name.
+    pub label: Option<String>,
+    pub default: Option<String>,
+    pub required: bool,
+    /// Read without echo, masked on screen.
+    pub secret: bool,
+    /// Expected to hold more than one line. The console shows it taller; the terminal
+    /// prompt reads until a blank line.
+    pub multiline: bool,
+    /// A line of explanation under the field.
+    pub help: Option<String>,
+}
+
+impl FormField {
+    pub fn title(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.name)
+    }
+}
+
+impl Document {
+    /// Parse the `-- form --` section. Same shape as `vars:`, because they are the same
+    /// kind of thing: a mapping of name → spec, or name → default for the short form.
+    ///
+    /// A malformed form is an error rather than an empty one: silently showing no fields
+    /// for a request that needs three is worse than refusing to open it.
+    pub fn form(&self) -> Result<Vec<FormField>, String> {
+        let Some(body) = self.section("form").filter(|s| !s.trim().is_empty()) else {
+            return Ok(Vec::new());
+        };
+        let value: Value = serde_norway::from_str(body)
+            .map_err(|e| format!("`-- form --` is not valid YAML: {e}"))?;
+        let Value::Mapping(map) = value else {
+            return Err("`-- form --` must be a mapping of field names to specs".into());
+        };
+
+        let mut notes = Vec::new();
+        let mut fields = Vec::new();
+        for (key, spec) in map {
+            let name = match &key {
+                Value::String(s) => s.clone(),
+                other => scalar(other, "form: field name", &mut notes)?,
+            };
+            let at = format!("form.{name}");
+            let field = match spec {
+                Value::Mapping(mut m) => FormField {
+                    label: take_str(&mut m, "label", &mut notes)?,
+                    default: take_str(&mut m, "default", &mut notes)?,
+                    required: take_bool(&mut m, "required", &mut notes)?.unwrap_or(false),
+                    secret: take_bool(&mut m, "secret", &mut notes)?.unwrap_or(false),
+                    multiline: take_bool(&mut m, "multiline", &mut notes)?.unwrap_or(false),
+                    help: take_str(&mut m, "help", &mut notes)?,
+                    name,
+                },
+                // `text: "hello"` — the short form, a default and nothing else.
+                other => FormField {
+                    default: Some(scalar(&other, &at, &mut notes)?),
+                    name,
+                    ..FormField::default()
+                },
+            };
+            fields.push(field);
+        }
+        Ok(fields)
+    }
+
+    /// The form's fields as declared variables, so the terminal prompt path and the console
+    /// form ask for exactly the same things.
+    pub fn form_vars(&self) -> Result<Vec<(String, VarSpec)>, String> {
+        Ok(self
+            .form()?
+            .into_iter()
+            .map(|f| {
+                let title = f.title().to_string();
+                (
+                    f.name.clone(),
+                    VarSpec {
+                        default: f.default,
+                        prompt: Some(title),
+                        env: None,
+                        secret: f.secret,
+                        required: f.required,
+                        description: f.help,
+                    },
+                )
+            })
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod form_tests {
+    use super::*;
+
+    const DOC: &str = "---\nurl: https://api.test/posts\nmethod: POST\n---\n\n\
+        -- form --\n\n\
+        text: { label: \"What's happening?\", multiline: true, required: true }\n\
+        reply_to: { label: \"Reply to\", help: \"a post id, or leave empty\" }\n\
+        draft: false\n";
+
+    #[test]
+    fn a_form_declares_fields_in_file_order() {
+        let (doc, _) = Document::parse(DOC).unwrap();
+        let form = doc.form().unwrap();
+        assert_eq!(
+            form.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            vec!["text", "reply_to", "draft"]
+        );
+        assert_eq!(form[0].title(), "What's happening?");
+        assert!(form[0].multiline && form[0].required);
+        assert_eq!(form[1].help.as_deref(), Some("a post id, or leave empty"));
+        // The short form is a default and nothing else.
+        assert_eq!(form[2].default.as_deref(), Some("false"));
+        assert_eq!(form[2].title(), "draft");
+    }
+
+    #[test]
+    fn a_form_becomes_the_same_declared_variables_the_prompt_path_uses() {
+        let (doc, _) = Document::parse(DOC).unwrap();
+        let vars = doc.form_vars().unwrap();
+        assert_eq!(vars[0].0, "text");
+        assert_eq!(vars[0].1.prompt.as_deref(), Some("What's happening?"));
+        assert!(vars[0].1.required);
+    }
+
+    #[test]
+    fn no_form_section_is_no_fields_not_an_error() {
+        let (doc, _) = Document::parse("---\nurl: u\n---\n").unwrap();
+        assert!(doc.form().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_malformed_form_refuses_rather_than_showing_nothing() {
+        let (doc, _) =
+            Document::parse("---\nurl: u\n---\n\n-- form --\n\njust a sentence\n").unwrap();
+        let err = doc.form().unwrap_err();
+        assert!(err.contains("mapping"), "{err}");
+    }
+
+    #[test]
+    fn a_form_round_trips_through_write() {
+        let (doc, _) = Document::parse(DOC).unwrap();
+        let (again, _) = Document::parse(&doc.write()).unwrap();
+        assert_eq!(doc.form().unwrap(), again.form().unwrap());
+    }
+}
