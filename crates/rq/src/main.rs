@@ -51,6 +51,10 @@ struct Cli {
     /// Set a variable for bare `rq`. Repeatable.
     #[arg(long = "var", value_name = "KEY=VALUE")]
     vars: Vec<String>,
+
+    /// Browse the list instead of printing it — the same flag `rq l` and `rq r` take.
+    #[arg(long, short = 'c')]
+    console: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -73,11 +77,10 @@ enum Command {
         name: String,
     },
 
-    /// List the requests in this project.
+    /// List the requests in this project. This is what bare `rq` does.
     #[command(alias = "list", alias = "ls")]
     L {
-        /// Browse them instead of printing: arrow to one, enter to run it. What bare `rq`
-        /// does.
+        /// Browse them instead of printing: arrow to one, enter to run it.
         #[arg(long, short = 'c')]
         console: bool,
     },
@@ -226,18 +229,10 @@ fn restore_sigpipe() {
 fn dispatch(cli: &Cli) -> Result<i32> {
     let cwd = std::env::current_dir()?;
     match &cli.command {
-        // Bare `rq` browses; `rq l` prints; `rq l -c` browses, so the two commands take
-        // the same flag for the same thing. Piping bare `rq` prints too — a command that
-        // blocked on a terminal that isn't there would be a bad citizen in a pipeline.
-        None | Some(Command::L { console: true }) if console::available() => {
-            let project = open(cli, &cwd)?;
-            browse(cli, &project)
-        }
-        None | Some(Command::L { .. }) => {
-            let project = open(cli, &cwd)?;
-            list(&project);
-            Ok(0)
-        }
+        // Bare `rq` *is* `rq l` — same output, same flags, no surprise depending on
+        // whether something is watching. `-c` browses either way.
+        None => list_or_browse(cli, cli.console),
+        Some(Command::L { console }) => list_or_browse(cli, *console),
         Some(Command::R(args)) => {
             let project = open(cli, &cwd)?;
             run_request(&project, args)
@@ -275,6 +270,19 @@ fn dispatch(cli: &Cli) -> Result<i32> {
 
 fn open(cli: &Cli, cwd: &Path) -> Result<Project> {
     Project::find(cli.project.as_deref(), cwd)
+}
+
+/// The project's requests: printed, or browsed when asked for and possible.
+fn list_or_browse(cli: &Cli, console: bool) -> Result<i32> {
+    let project = open(cli, &std::env::current_dir()?)?;
+    if console {
+        if console::available() {
+            return browse(cli, &project);
+        }
+        ui::note("--console needs a terminal; printed the list instead");
+    }
+    list(&project);
+    Ok(0)
 }
 
 /// Open the project browser: the request list, with the same environment and variables a
