@@ -85,6 +85,8 @@ Two things keep this from becoming an N×M translation matrix:
 Curl in, named verb out, editor for everything else:
 
 ```bash
+cargo install --path crates/rq    # once — see Install below
+
 rq curl --save-as issues 'curl -H "Accept: application/vnd.github+json" \
     "https://api.github.com/repos/anthropics/claude-code/issues?state=open"'
 
@@ -144,7 +146,7 @@ someone's memory of what they said.
 and `examples/app/` is a **frontend for it**, written entirely as request documents.
 
 ```bash
-cargo run -p rq-testbed            # the app's backend
+cargo run -p rq-testbed            # the app's backend, in another terminal
 cd examples/app
 rq r timeline -e local --console   # the app
 ```
@@ -166,6 +168,35 @@ document the API.
 - [`docs/FORMAT.md`](docs/FORMAT.md) — the Requestly `LOCAL_FS` on-disk format `cross-q` writes.
 - [`docs/CONTEXT.md`](docs/CONTEXT.md) — the `rq.*` scripting runtime spec.
 
+## Install
+
+There are no packages yet — no Homebrew tap, no apt repo, no release binaries. Until there
+are, it is one command, and you need a Rust toolchain ([rustup](https://rustup.rs)):
+
+```bash
+git clone https://github.com/browserstack/rq && cd rq
+cargo install --path crates/rq            # → ~/.cargo/bin/rq
+cargo install --path crates/rq-testbed    # optional: the demo backend
+```
+
+Check it landed:
+
+```bash
+rq --version
+rq --help
+```
+
+If `rq` isn't found afterwards, `~/.cargo/bin` isn't on your `PATH` — rustup normally adds
+it to your shell profile, and `export PATH="$HOME/.cargo/bin:$PATH"` fixes it for the
+session.
+
+> **A name to know about.** Requestly's own npm CLI (`@requestly/cli`) also installs a
+> binary called `rq`. If you have both, whichever comes first on your `PATH` wins.
+
+To pick up changes later, `git pull` and run the same `cargo install` again; it replaces the
+installed binary in place. `cargo install --path crates/rq --locked` builds against the
+committed `Cargo.lock` if you would rather not resolve fresh dependency versions.
+
 ## Build
 
 ```bash
@@ -174,7 +205,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-Rust 1.85+ (2021 edition). One workspace, one version train.
+Rust 1.85+ (2021 edition). One workspace, one version train. `cargo run -p rq -- <args>`
+runs the CLI out of the working tree without installing it.
 
 ## Testing
 
