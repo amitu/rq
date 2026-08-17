@@ -63,4 +63,21 @@ assert.equal(byName['this fails'].status, 'failed', 'failing assertion → faile
 assert.ok(byName['this fails'].error, 'failed test carries an error message');
 ok(`rq.test + rq.expect (chai via require-chain): 1 passed, 1 failed`);
 
-console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, AND chai-backed rq.test — end to end.`);
+// 6. Delegated fetch (rq.sendRequest) — the host provides the network backend; cross-q-context
+//    marshals the request out and the response back, driving the async pump to settlement.
+let captured = null;
+const sendRequest = async (req) => {
+  captured = req;
+  return { status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' }, body: '{"pong":true}', bodyEncoding: 'utf8' };
+};
+const fetchScript = "pm.sendRequest('https://api.example.com/ping', function (err, res) { pm.environment.set('fetchOutcome', err ? 'error' : ('ok:' + res.code)); });";
+const ft = transformScript({ source: fetchScript, platform: 'postman' });
+const fr = await executeScript({ script: ft.code, phase: 'pre-request', context, sendRequest });
+assert.ok(!fr.error, `no execution error (got: ${fr.error})`);
+assert.ok(captured, 'host sendRequest was called');
+assert.equal(captured.url, 'https://api.example.com/ping', 'request url marshalled to host');
+assert.equal(captured.method, 'GET', 'request method marshalled to host');
+assert.equal(fr.mutationDiff.environment.fetchOutcome.localValue, 'ok:200', 'response delivered to the script callback');
+ok('rq.sendRequest → delegated fetch → async response (status 200)');
+
+console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, chai-backed rq.test, AND delegated fetch (rq.sendRequest) — end to end.`);

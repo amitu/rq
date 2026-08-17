@@ -19,6 +19,12 @@ import { BUFFER_ISOLATE_SHIM } from './isolated/shims/buffer.shim.js';
 import { CRYPTO_ISOLATE_SHIM } from './isolated/shims/crypto.shim.js';
 import { UTIL_ISOLATE_SHIM } from './isolated/shims/util.shim.js';
 import { ZLIB_ISOLATE_SHIM } from './isolated/shims/zlib.shim.js';
+import { FETCH_ISOLATE_SHIM } from './isolated/shims/fetch.shim.js';
+import { createFetchBridge } from './fetch-bridge.js';
+import { createTimerBridges } from './isolated/bridges/timer-bridge.js';
+import { AsyncRegistry } from './async-registry.js';
+import { pendingAsyncCalls } from './isolated/safe-bridge-factory.js';
+import { LogLevel } from '../contract.js';
 import { RQ_ISOLATE_SHIM, RQ_COLLECT_EXPR } from './isolated/isolated-rq.js';
 import { REQUIRE_ISOLATE_SHIM } from './isolated/shims/require.shim.js';
 import { VENDOR_IIFES } from './vendor-codegen/vendor-iifes.js';
@@ -90,6 +96,19 @@ export async function executeScript(input) {
     const deadline = Date.now() + timeoutMs;
     let opCount = 0;
     runtime.setInterruptHandler(() => (opCount += 1) > 1_000_000 || Date.now() > deadline);
+    // Per-execution async registry backing the guest timers (setTimeout/clearTimeout, and the
+    // callback dispatch that rq.sendRequest uses). Sealed on every exit so no host timer outlives
+    // the isolate.
+    const timerError = (message) => {
+        logs.push({ level: LogLevel.error, args: [`Uncaught error in timer callback: ${message}`], timestamp: Date.now() });
+    };
+    const asyncRegistry = new AsyncRegistry({
+        timers: {
+            scheduleTimer: (fn, ms) => setTimeout(fn, ms),
+            cancelTimer: (handle) => clearTimeout(handle),
+        },
+        onCallbackError: (error) => timerError(error instanceof Error ? error.message : String(error)),
+    });
     try {
         ctx.setProp(ctx.global, 'global', ctx.global);
         const consoleBridge = createConsoleBridge((entry) => logs.push(entry), () => Date.now());
@@ -107,6 +126,17 @@ export async function executeScript(input) {
         ctx.setProp(ctx.global, '__rq_bundleRequire', requireFn);
         requireFn.dispose();
         installedGlobals.push('__rq_bundleRequire');
+        // Timers — the guest setTimeout/clearTimeout (also how rq.sendRequest dispatches its callback).
+        for (const bridge of createTimerBridges(asyncRegistry, timerError)) {
+            bridge.install(ctx);
+            installedGlobals.push(bridge.name);
+        }
+        // Delegated fetch — only when the host supplies a sendRequest backend.
+        if (input.sendRequest) {
+            const fetchBridge = createFetchBridge(input.sendRequest);
+            fetchBridge.install(ctx);
+            installedGlobals.push(fetchBridge.name);
+        }
         // Copy the context + phase + cookie-jar allowlist in as strings (nothing live crosses).
         setStringGlobal(ctx, '__rq_context_json', JSON.stringify(input.context));
         setStringGlobal(ctx, '__rq_phase', input.phase);
@@ -123,6 +153,8 @@ export async function executeScript(input) {
         evalOrThrow(ctx, CRYPTO_ISOLATE_SHIM, 'crypto-shim');
         evalOrThrow(ctx, UTIL_ISOLATE_SHIM, 'util-shim');
         evalOrThrow(ctx, ZLIB_ISOLATE_SHIM, 'zlib-shim');
+        if (input.sendRequest)
+            evalOrThrow(ctx, FETCH_ISOLATE_SHIM, 'fetch-shim');
         // The require chain, then load chai (the real thing, from VENDOR_IIFES) so rq.test/rq.expect
         // assert for real, then build the rq.* namespace over it.
         evalOrThrow(ctx, REQUIRE_ISOLATE_SHIM, 'require-chain');
@@ -137,8 +169,22 @@ export async function executeScript(input) {
             const message = err && typeof err === 'object' && 'message' in err ? String(err.message) : String(err);
             return { mutationDiff: {}, logs, testResults: [], error: message };
         }
-        // Flush the microtask queue so the async IIFE settles (no host-async in this cut).
-        runtime.executePendingJobs();
+        // Drive the async IIFE to settlement: advance the guest microtask chain while its promise is
+        // pending, host async calls (fetch) are in flight, or jobs remain — yielding to the host event
+        // loop each turn so a delegated fetch can resolve. Bounded by the same deadline as the script.
+        const promise = evalResult.value;
+        let pumped = 0;
+        while (ctx.getPromiseState(promise).type === 'pending' ||
+            pendingAsyncCalls(ctx) > 0 ||
+            runtime.hasPendingJob()) {
+            if (opCount > 1_000_000 || Date.now() > deadline)
+                break;
+            runtime.executePendingJobs();
+            await new Promise((resolve) => setTimeout(resolve, 1));
+            pumped += 1;
+            if (pumped > 100_000)
+                break;
+        }
         evalResult.value.dispose();
         // Any error the guest's top-level catch recorded.
         const userError = evalStringOut(ctx, "globalThis.__rq_error || ''");
@@ -166,6 +212,7 @@ export async function executeScript(input) {
         // host-function globals so their HostRefs are freed, then dispose context before runtime.
         // Each step guarded — a teardown throw must not mask the result.
         try {
+            asyncRegistry.seal();
             runtime.removeInterruptHandler();
             if (installedGlobals.length > 0) {
                 const nullExpr = installedGlobals.map((n) => `globalThis[${JSON.stringify(n)}]=undefined;`).join('') + 'true';
