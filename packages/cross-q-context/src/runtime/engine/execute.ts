@@ -22,8 +22,12 @@ import { CRYPTO_ISOLATE_SHIM } from './isolated/shims/crypto.shim.js';
 import { UTIL_ISOLATE_SHIM } from './isolated/shims/util.shim.js';
 import { ZLIB_ISOLATE_SHIM } from './isolated/shims/zlib.shim.js';
 import { RQ_ISOLATE_SHIM, RQ_COLLECT_EXPR } from './isolated/isolated-rq.js';
+import { REQUIRE_ISOLATE_SHIM } from './isolated/shims/require.shim.js';
+import { VENDOR_IIFES } from './vendor-codegen/vendor-iifes.js';
+import { marshalToHandle } from './isolated/marshal.js';
 import { inflateMutations } from './inflate-mutations.js';
 import { SANDBOX_DEFAULT_TIMEOUT_MS } from './constants.js';
+import { EXTERNAL_BUILTIN_PACKAGES } from '../definitions/builtInPackages/index.js';
 
 import type { ScriptExecutionResult } from './host-types.js';
 import type { LogEntry, RequestHeaderMutation } from '../contract.js';
@@ -56,6 +60,22 @@ function setStringGlobal(ctx: QuickJSAsyncContext, name: string, value: string):
   const handle = ctx.newString(value);
   ctx.setProp(ctx.global, name, handle);
   handle.dispose();
+}
+
+// require() resolution — the built-in tier only (chai/lodash/moment/… served from the build-time
+// VENDOR_IIFES bundles keyed by registry globalName). Bridge-backed builtins (crypto) and the
+// user-package SOURCE_BUNDLE tier are follow-ups; unknown ids resolve to `impossible`.
+const GLOBAL_NAME_BY_ID: ReadonlyMap<string, string> = new Map(
+  EXTERNAL_BUILTIN_PACKAGES.map((p) => [p.id, p.globalName]),
+);
+type RequireResolution =
+  | { kind: 'iife'; code: string; globalName: string }
+  | { kind: 'impossible'; id: string };
+function resolveRequireId(id: string): RequireResolution {
+  const code = (VENDOR_IIFES as Record<string, string | undefined>)[id];
+  const globalName = GLOBAL_NAME_BY_ID.get(id) ?? (id === 'events' ? '__events' : undefined);
+  if (code && globalName) return { kind: 'iife', code, globalName };
+  return { kind: 'impossible', id };
 }
 
 /** Eval guest source; throw with the guest error message on failure (assembly steps must succeed). */
@@ -116,6 +136,19 @@ export async function executeScript(input: ExecuteScriptInput): Promise<ScriptEx
     consoleBridge.install(ctx);
     installedGlobals.push(consoleBridge.name);
 
+    // The require dispatch callback the REQUIRE_ISOLATE_SHIM calls: id → bundle resolution.
+    const requireFn = ctx.newFunction('__rq_bundleRequire', (idHandle) => {
+      const id = String(ctx.dump(idHandle));
+      const res = resolveRequireId(id);
+      if (res.kind === 'impossible') {
+        return { error: ctx.newString(`require('${id}') is not available in the safe sandbox`) };
+      }
+      return marshalToHandle(ctx, res);
+    });
+    ctx.setProp(ctx.global, '__rq_bundleRequire', requireFn);
+    requireFn.dispose();
+    installedGlobals.push('__rq_bundleRequire');
+
     // Copy the context + phase + cookie-jar allowlist in as strings (nothing live crosses).
     setStringGlobal(ctx, '__rq_context_json', JSON.stringify(input.context));
     setStringGlobal(ctx, '__rq_phase', input.phase);
@@ -133,9 +166,10 @@ export async function executeScript(input: ExecuteScriptInput): Promise<ScriptEx
     evalOrThrow(ctx, CRYPTO_ISOLATE_SHIM, 'crypto-shim');
     evalOrThrow(ctx, UTIL_ISOLATE_SHIM, 'util-shim');
     evalOrThrow(ctx, ZLIB_ISOLATE_SHIM, 'zlib-shim');
-    // rq.test/rq.expect are chai-backed (require-chain slice); stub so the namespace builds and
-    // non-assertion scripts run. Calling rq.expect without chai throws inside the guest.
-    evalOrThrow(ctx, 'globalThis.__rq_chai = globalThis.__rq_chai || {};', 'chai-stub');
+    // The require chain, then load chai (the real thing, from VENDOR_IIFES) so rq.test/rq.expect
+    // assert for real, then build the rq.* namespace over it.
+    evalOrThrow(ctx, REQUIRE_ISOLATE_SHIM, 'require-chain');
+    evalOrThrow(ctx, 'globalThis.__rq_chai = globalThis.require("chai");', 'chai-load');
     evalOrThrow(ctx, RQ_ISOLATE_SHIM, 'rq-namespace');
 
     // Eval the user script wrapped in an async IIFE with a top-level catch that records the error.

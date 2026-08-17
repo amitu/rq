@@ -50,4 +50,17 @@ ok('rq.globals.set → inflated MutationDiff (count=2)');
 assert.ok(result.logs.some((l) => Array.isArray(l.args) && l.args.some((a) => String(a).includes('hello from the sandbox'))), 'console.log captured');
 ok('console.log captured through the console bridge');
 
-console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS, end to end.`);
+// 5. Chai-backed rq.test / rq.expect (the require-chain) — a passing and a failing assertion.
+const testScript = "pm.test('math works', () => { pm.expect(1 + 1).to.equal(2); });\npm.test('this fails', () => { pm.expect('a').to.equal('b'); });";
+const tt = transformScript({ source: testScript, platform: 'postman' });
+assert.equal(tt.success, true, 'test-script transform succeeded');
+const tr = await executeScript({ script: tt.code, phase: 'post-response', context });
+assert.ok(!tr.error, `no execution error (got: ${tr.error})`);
+assert.equal(tr.testResults.length, 2, 'two test results');
+const byName = Object.fromEntries(tr.testResults.map((t) => [t.name, t]));
+assert.equal(byName['math works'].status, 'passed', 'passing assertion → passed');
+assert.equal(byName['this fails'].status, 'failed', 'failing assertion → failed');
+assert.ok(byName['this fails'].error, 'failed test carries an error message');
+ok(`rq.test + rq.expect (chai via require-chain): 1 passed, 1 failed`);
+
+console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, AND chai-backed rq.test — end to end.`);
