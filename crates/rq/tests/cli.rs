@@ -52,6 +52,9 @@ impl Fixture {
             // A predictable, non-interactive environment: no inherited RQ_PROJECT, no
             // colour, no editor surprises.
             .env_remove("RQ_PROJECT")
+            // Hermetic: these suites are about the CLI, not the engine. Whether one
+            // happens to be installed must not change what they assert.
+            .env("RQ_SCRIPT_ENGINE", "/nonexistent/cross-q-context")
             .env("NO_COLOR", "1")
             .output()
             .expect("running rq")
@@ -229,6 +232,7 @@ fn secrets_are_masked_in_shown_output() {
         .args(["r", "secure", "--show", "request", "--color=never"])
         .current_dir(f.root())
         .env("RQ_IT_TOKEN", "super-secret-value")
+        .env("RQ_SCRIPT_ENGINE", "/nonexistent/cross-q-context")
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
@@ -269,6 +273,9 @@ fn a_failing_status_is_visible_and_opt_in_for_the_exit_code() {
     assert_eq!(failing.status.code(), Some(1));
 }
 
+/// With no engine to run it, a script is *reported*, never silently skipped — and
+/// `--strict` turns that into a failure. (That an engine really runs one is
+/// `tests/engine.rs`; this suite pins the other half.)
 #[test]
 fn an_unrun_script_is_reported_on_every_run() {
     let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
@@ -391,6 +398,7 @@ fn without_a_project_the_error_says_what_to_do() {
         .args(["l", "--color=never"])
         .current_dir(dir.path())
         .env_remove("RQ_PROJECT")
+        .env("RQ_SCRIPT_ENGINE", "/nonexistent/cross-q-context")
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));

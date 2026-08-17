@@ -902,9 +902,9 @@ rq.test('200 OK', () => rq.response.status === 200);
         assert!(doc.front.parents.is_empty());
         assert!(doc.section("description").unwrap().starts_with("List open"));
         assert!(doc.section("post").unwrap().contains("rq.test"));
-        // The only note is the coerced `per_page: 5`.
-        assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].0.contains("per_page"));
+        // Nothing to report: `per_page: 5` is how a person writes a number, and it becomes
+        // "5" exactly.
+        assert!(notes.is_empty(), "{notes:?}");
     }
 
     #[test]

@@ -371,11 +371,11 @@ fn browse(cli: &Cli, project: &Project) -> Result<i32> {
         interactive: false,
         ..RunOptions::default()
     };
-    let engine = script::NoEngine;
+    let engine = pick_engine();
     console::browse(console::Nav {
         project,
         opts: &opts,
-        engine: &engine,
+        engine: engine.as_ref(),
     })?;
     Ok(0)
 }
@@ -383,6 +383,18 @@ fn browse(cli: &Cli, project: &Project) -> Result<i32> {
 // ---------------------------------------------------------------------------------------
 // rq r
 // ---------------------------------------------------------------------------------------
+
+/// The engine to run scripts with: cross-q-context when it can be found, and an honest
+/// nothing when it can't.
+///
+/// A missing engine is not an error — every request that has no script runs exactly as
+/// before. It becomes visible only on a run that needed one, which is where it matters.
+fn pick_engine() -> Box<dyn script::ScriptEngine> {
+    match script::NodeEngine::discover() {
+        Ok(engine) => Box::new(engine),
+        Err(why) => Box::new(script::NoEngine::because(why)),
+    }
+}
 
 /// One run, as data. Everything the terminal shows and the things it can't: per-phase
 /// timings, every header, the parsed body when there is one.
@@ -648,9 +660,8 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         }
     }
 
-    // The engine this build hosts. Swapping in a real one is this line.
-    let engine = script::NoEngine;
-    let outcome = run::run(project, target, &opts, &engine)?;
+    let engine = pick_engine();
+    let outcome = run::run(project, target, &opts, engine.as_ref())?;
     if args.json {
         println!("{:#}", run_json(&outcome));
     } else {
@@ -676,7 +687,7 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
             ui::dim("follow →"),
             ui::bold(&format!("{} ({})", link.label.trim(), link.target))
         );
-        outcome = run::follow(project, link, &opts, &engine)?;
+        outcome = run::follow(project, link, &opts, engine.as_ref())?;
         print_run(&outcome, args);
     }
 
@@ -693,7 +704,7 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
             let nav = console::Nav {
                 project,
                 opts: &console_opts,
-                engine: &engine,
+                engine: engine.as_ref(),
             };
             console::open(outcome.clone(), Some(nav))?;
         }

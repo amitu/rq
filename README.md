@@ -118,12 +118,25 @@ The format is a first-class cross-q citizen in both directions — `cq convert x
 brings a collection in, and `cq convert ./my-apis --to bruno` takes it anywhere else — so
 `rq import` is that converter, not a second implementation of it.
 
-Full spec: [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md). Scripts (`-- pre --` / `-- post --`)
-are parsed and round-tripped but **not yet executed** — every run that has one says so, and
-`--strict` fails on it. `rq` *hosts* the engine rather than implementing it: the header
-mutations, variable writes, test results, execution directives and cookie-jar seeding a
-script produces are already wired through the run and covered by tests against a stub
-engine, so `cross-q-context` drops into one trait when it ships.
+Full spec: [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md).
+
+**Scripts run.** `-- pre --` and `-- post --` execute on
+[cross-q-context](packages/cross-q-context) — the same QuickJS engine and the same `rq.*`
+API the Requestly app uses, so a collection behaves the same in both. `rq.test(…)` results
+print and set the exit code, `console.log` appears under its step, `rq.variables.set(…)`
+reaches the next request in the graph, and `rq.request.headers.*` changes what goes on the
+wire.
+
+The engine is JavaScript driving QuickJS-on-WASM and `rq` is a Rust binary, so scripts need
+**Node** and a built cross-q-context:
+
+```bash
+cd packages/cross-q-context && npm install    # once
+```
+
+`rq` finds it in this repo automatically; `RQ_SCRIPT_ENGINE=/path/to/cross-q-context` points
+it elsewhere. Without it everything else works exactly as before and any run with a script
+says precisely what is missing — `--strict` turns that into a failure.
 
 ## Try it against something real
 

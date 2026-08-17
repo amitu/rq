@@ -15,8 +15,8 @@ use support::Stub;
 use rq::project::{self, Project};
 use rq::run::{self, RunOptions};
 use rq::script::{
-    ExecutionDirective, LogEntry, MutationDiff, RequestHeaderMutation, RequestMutationDiff,
-    ScriptEngine, ScriptExecutionInput, ScriptExecutionResult, ScriptPhase, TestResult, TestStatus,
+    ExecutionDirective, LogEntry, MutationDiff, RequestMutationDiff, ScriptEngine,
+    ScriptExecutionInput, ScriptExecutionResult, ScriptPhase, TestResult, TestStatus,
 };
 
 /// An engine that answers with whatever the test says, and records what it was asked.
@@ -108,13 +108,8 @@ fn a_pre_request_script_changes_what_goes_on_the_wire() {
     let engine = FakeEngine::new(|_| ScriptExecutionResult {
         request_mutation_diff: Some(RequestMutationDiff {
             headers: vec![
-                RequestHeaderMutation::Upsert {
-                    name: "X-Signature".into(),
-                    value: "abc123".into(),
-                },
-                RequestHeaderMutation::Remove {
-                    name: "X-Drop".into(),
-                },
+                serde_json::json!({ "kind": "upsert", "name": "X-Signature", "value": "abc123" }),
+                serde_json::json!({ "kind": "remove", "name": "X-Drop" }),
             ],
         }),
         ..ScriptExecutionResult::default()
@@ -160,7 +155,12 @@ fn a_post_response_variable_reaches_the_next_request() {
     let engine = FakeEngine::new(|input| {
         if input.phase == ScriptPhase::PostResponse {
             let mut vars = serde_json::Map::new();
-            vars.insert("token".into(), serde_json::json!("from-script"));
+            // The engine inflates a set into a VariableData, which is what a host really
+            // receives — a bare string would be a friendlier fiction than the truth.
+            vars.insert(
+                "token".into(),
+                serde_json::json!({ "localValue": "from-script", "syncValue": "", "type": "string" }),
+            );
             return ScriptExecutionResult {
                 mutation_diff: MutationDiff {
                     environment: Some(vars),
@@ -296,7 +296,7 @@ fn a_cookie_set_by_one_step_is_sent_on_the_next() {
         &format!("---\nurl: {}/me\nparents: [login]\n---\n", stub.base),
     );
 
-    let outcome = f.run("me", &rq::script::NoEngine);
+    let outcome = f.run("me", &rq::script::NoEngine::default());
     assert_eq!(outcome.steps.len(), 2);
 
     let login = stub.next();
@@ -414,7 +414,7 @@ fn the_shipped_build_reports_that_the_script_never_ran() {
         ),
     );
 
-    let outcome = f.run("scripted", &rq::script::NoEngine);
+    let outcome = f.run("scripted", &rq::script::NoEngine::default());
     assert!(
         outcome
             .target()
@@ -498,10 +498,13 @@ fn a_variable_set_by_a_collection_script_reaches_the_request_it_wraps() {
 
     let engine = FakeEngine::new(|_| {
         let mut vars = serde_json::Map::new();
-        vars.insert("signature".into(), serde_json::json!("computed-abc"));
+        vars.insert(
+            "signature".into(),
+            serde_json::json!({ "localValue": "computed-abc", "syncValue": "" }),
+        );
         ScriptExecutionResult {
             mutation_diff: MutationDiff {
-                variables: Some(vars),
+                runtime: Some(vars),
                 ..MutationDiff::default()
             },
             ..ScriptExecutionResult::default()
@@ -534,10 +537,7 @@ fn header_mutations_accumulate_across_the_chain() {
         };
         ScriptExecutionResult {
             request_mutation_diff: Some(RequestMutationDiff {
-                headers: vec![RequestHeaderMutation::Upsert {
-                    name: name.into(),
-                    value: "1".into(),
-                }],
+                headers: vec![serde_json::json!({ "kind": "upsert", "name": name, "value": "1" })],
             }),
             ..ScriptExecutionResult::default()
         }
@@ -637,7 +637,7 @@ fn an_unrun_collection_script_is_reported_under_its_collection() {
     f.write_collection("acme", "---\n---\n\n-- pre --\n\ncollectionScript();\n");
     f.write("acme/ping", &format!("---\nurl: {}/ping\n---\n", stub.base));
 
-    let outcome = f.run("acme/ping", &rq::script::NoEngine);
+    let outcome = f.run("acme/ping", &rq::script::NoEngine::default());
     assert!(
         outcome
             .target()
