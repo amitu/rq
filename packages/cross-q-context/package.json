@@ -29,6 +29,10 @@
       "types": "./dist/runtime/engine/index.d.ts",
       "default": "./dist/runtime/engine/index.js"
     },
+    "./ssrf-guard": {
+      "types": "./dist/runtime/engine/ssrf-guard.d.ts",
+      "default": "./dist/runtime/engine/ssrf-guard.js"
+    },
     "./executor/browser": {
       "types": "./dist/runtime/engine/browser/index.d.ts",
       "default": "./dist/runtime/engine/browser/index.js"
