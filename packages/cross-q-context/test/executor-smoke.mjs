@@ -7,7 +7,19 @@ import assert from 'node:assert/strict';
 import asyncifyVariant from '@jitl/quickjs-singlefile-cjs-release-asyncify';
 import { newQuickJSAsyncWASMModuleFromVariant } from 'quickjs-emscripten-core';
 
-import { marshalToHandle, dumpHandle, createSafeBridge, isDebugEnabled } from '../dist/runtime/engine/index.js';
+import {
+  marshalToHandle,
+  dumpHandle,
+  createSafeBridge,
+  isDebugEnabled,
+  CORE_GLOBALS_SHIM,
+  BUFFER_ISOLATE_SHIM,
+  CRYPTO_ISOLATE_SHIM,
+  FETCH_ISOLATE_SHIM,
+  UTIL_ISOLATE_SHIM,
+  ZLIB_ISOLATE_SHIM,
+  RQ_ISOLATE_SHIM,
+} from '../dist/runtime/engine/index.js';
 
 let passed = 0;
 const ok = (name) => {
@@ -54,7 +66,40 @@ try {
   assert.equal(typeof isDebugEnabled(), 'boolean', 'isDebugEnabled returns a boolean');
   ok('debug-log helper importable');
 
-  console.log(`\nExecutor smoke OK — ${passed} checks. Isolate primitives run in QuickJS from cross-q-context.`);
+  // 5. The ported guest-side realm strings are SYNTACTICALLY VALID QuickJS programs. Each is
+  //    eval'd in a fresh isolate; a SyntaxError means the string-port corrupted the source. A
+  //    ReferenceError (a shim reaching for a host global not yet installed) is expected here — the
+  //    host layer installs those bridges before eval in the real assembly.
+  const shims = [
+    ['CORE_GLOBALS_SHIM', CORE_GLOBALS_SHIM],
+    ['BUFFER_ISOLATE_SHIM', BUFFER_ISOLATE_SHIM],
+    ['CRYPTO_ISOLATE_SHIM', CRYPTO_ISOLATE_SHIM],
+    ['FETCH_ISOLATE_SHIM', FETCH_ISOLATE_SHIM],
+    ['UTIL_ISOLATE_SHIM', UTIL_ISOLATE_SHIM],
+    ['ZLIB_ISOLATE_SHIM', ZLIB_ISOLATE_SHIM],
+    ['RQ_ISOLATE_SHIM', RQ_ISOLATE_SHIM],
+  ];
+  for (const [label, src] of shims) {
+    assert.equal(typeof src, 'string', `${label} is a string`);
+    assert.ok(src.length > 0, `${label} is non-empty`);
+    const shimCtx = mod.newContext();
+    try {
+      const res = shimCtx.evalCode(src);
+      if (res.error) {
+        const err = shimCtx.dump(res.error);
+        res.error.dispose();
+        const name = (err && err.name) || String(err);
+        assert.notEqual(name, 'SyntaxError', `${label} has no SyntaxError (got: ${JSON.stringify(err)})`);
+      } else {
+        res.value.dispose();
+      }
+    } finally {
+      shimCtx.dispose();
+    }
+    ok(`guest-side realm string parses in QuickJS: ${label}`);
+  }
+
+  console.log(`\nExecutor smoke OK — ${passed} checks. Isolate primitives + guest realm strings run in QuickJS from cross-q-context.`);
 } finally {
   ctx.dispose();
 }
