@@ -46,6 +46,14 @@ export {
 } from './isolated/bridges/deprecation-bridge.js';
 export { createTimerBridges } from './isolated/bridges/timer-bridge.js';
 
+// Node-backed value bridges (Buffer/crypto/util/zlib) — the host halves of those capability shims,
+// installed unconditionally by the full engine. And the push-based streaming result transport.
+export { createBufferBridge } from './isolated/bridges/buffer-bridge.js';
+export { createCryptoBridge } from './isolated/bridges/crypto-bridge.js';
+export { createUtilBridge } from './isolated/bridges/util-bridge.js';
+export { createZlibBridge } from './isolated/bridges/zlib-bridge.js';
+export { StreamHandle } from './stream-handle.js';
+
 // Async lifecycle + support.
 export { AsyncRegistry } from './async-registry.js';
 export type { TimerDelegations, AsyncRegistryOptions, SettleFn } from './async-registry.js';

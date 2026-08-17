@@ -106,8 +106,9 @@ export interface RuntimeComponent {
 }
 
 /** A pull reader over a stream of events (a subset of the async-iterator protocol). */
+export type StreamReadResult<T> = { done: false; value: T } | { done: true; value?: undefined };
 export interface StreamReader<T> {
-  read(): Promise<{ done: false; value: T } | { done: true; value?: undefined }>;
+  read(): Promise<StreamReadResult<T>>;
   cancel?(): Promise<void>;
 }
 
