@@ -36,6 +36,9 @@ impl Fixture {
             .args(["--color=never", "--var"])
             .arg(format!("host={}", self.server.base_url))
             .env_remove("RQ_PROJECT")
+            // Hermetic: these suites are about the CLI, not the engine. Whether one
+            // happens to be installed must not change what they assert.
+            .env("RQ_SCRIPT_ENGINE", "/nonexistent/cross-q-context")
             .env("NO_COLOR", "1")
             // The upload request sends a file by relative path.
             .current_dir(project())
@@ -206,7 +209,7 @@ fn the_console_follows_links_and_goes_back() {
         environment: Some("local".into()),
         ..rq::run::RunOptions::default()
     };
-    let engine = rq::script::NoEngine;
+    let engine = rq::script::NoEngine::default();
     let target = project.resolve("issues").unwrap();
     let first = rq::run::run(&project, target, &opts, &engine).unwrap();
 
@@ -257,7 +260,7 @@ fn a_link_that_does_not_exist_leaves_the_page_you_are_on() {
         environment: Some("local".into()),
         ..rq::run::RunOptions::default()
     };
-    let engine = rq::script::NoEngine;
+    let engine = rq::script::NoEngine::default();
     let target = project.resolve("issues").unwrap();
     let run = rq::run::run(&project, target, &opts, &engine).unwrap();
 
@@ -308,20 +311,32 @@ impl App {
 
     fn open(&self, name: &str) -> rq::console::Console<'_> {
         let target = self.project.resolve(name).unwrap();
-        let run = rq::run::run(&self.project, target, &self.opts, &rq::script::NoEngine).unwrap();
+        let run = rq::run::run(
+            &self.project,
+            target,
+            &self.opts,
+            &rq::script::NoEngine::default(),
+        )
+        .unwrap();
         rq::console::Console::with_nav(
             run,
             rq::console::Nav {
                 project: &self.project,
                 opts: &self.opts,
-                engine: &ENGINE,
+                engine: &*ENGINE,
             },
         )
     }
 
     fn total_posts(&self) -> u64 {
         let target = self.project.resolve("timeline").unwrap();
-        let run = rq::run::run(&self.project, target, &self.opts, &rq::script::NoEngine).unwrap();
+        let run = rq::run::run(
+            &self.project,
+            target,
+            &self.opts,
+            &rq::script::NoEngine::default(),
+        )
+        .unwrap();
         run.target()
             .response
             .as_ref()
@@ -331,7 +346,8 @@ impl App {
     }
 }
 
-static ENGINE: rq::script::NoEngine = rq::script::NoEngine;
+static ENGINE: std::sync::LazyLock<rq::script::NoEngine> =
+    std::sync::LazyLock::new(rq::script::NoEngine::default);
 
 fn press(console: &mut rq::console::Console<'_>, key: crossterm::event::KeyCode) {
     console.on_key(crossterm::event::KeyEvent::from(key));
@@ -452,6 +468,7 @@ fn the_form_also_works_without_a_terminal() {
         .arg("--project")
         .arg(app_project())
         .env_remove("RQ_PROJECT")
+        .env("RQ_SCRIPT_ENGINE", "/nonexistent/cross-q-context")
         .output()
         .unwrap();
     let text = format!(
@@ -505,7 +522,7 @@ fn a_project_browser_starts_with_no_page_at_all() {
     let mut console = rq::console::Console::browser(rq::console::Nav {
         project: &app.project,
         opts: &app.opts,
-        engine: &ENGINE,
+        engine: &*ENGINE,
     });
     let frame = console.frame().join("\n");
     assert!(frame.contains("6 requests"), "{frame}");
@@ -551,6 +568,7 @@ fn a_form_does_not_ask_when_the_command_line_already_answered() {
         .arg("--project")
         .arg(app_project())
         .env_remove("RQ_PROJECT")
+        .env("RQ_SCRIPT_ENGINE", "/nonexistent/cross-q-context")
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout).to_string();
@@ -569,6 +587,7 @@ fn a_form_default_that_is_a_template_resolves() {
         .arg("--project")
         .arg(app_project())
         .env_remove("RQ_PROJECT")
+        .env("RQ_SCRIPT_ENGINE", "/nonexistent/cross-q-context")
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout).to_string();

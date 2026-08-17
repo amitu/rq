@@ -225,11 +225,11 @@ pub fn run(
                 context: build_context(&prepared, None, &v, &jar, meta.clone()),
                 timeout_ms: opts.script_timeout_ms,
             };
-            let result = engine
-                .execute(&input)
-                .with_context(|| format!("{}: {label}", entry.rel))?;
+            let result = execute(engine, &input, &label);
             if let Some(diff) = &result.request_mutation_diff {
-                header_mutations.extend(diff.headers.iter().cloned());
+                let (usable, problems) = diff.parse();
+                header_mutations.extend(usable);
+                step_notes.extend(problems.into_iter().map(|p| format!("{label}: {p}")));
             }
             skip = absorb(
                 &result,
@@ -299,9 +299,7 @@ pub fn run(
                     context: build_context(&prepared, Some(resp), &v, &jar, meta.clone()),
                     timeout_ms: opts.script_timeout_ms,
                 };
-                let result = engine
-                    .execute(&input)
-                    .with_context(|| format!("{}: {label}", entry.rel))?;
+                let result = execute(engine, &input, &label);
                 absorb(
                     &result,
                     ScriptPhase::PostResponse,
@@ -1002,17 +1000,13 @@ fn absorb(
     notes: &mut Vec<String>,
 ) -> bool {
     for (key, value) in result.mutation_diff.all() {
-        runtime.retain(|(k, _)| k != key);
-        let resolved = match value {
-            serde_json::Value::Null => None, // an unset
-            serde_json::Value::String(s) => Some(s.clone()),
-            other => Some(other.to_string()),
-        };
-        if let Some(value) = resolved {
+        runtime.retain(|(k, _)| *k != key);
+        // `None` is an unset: dropping it above was the whole job.
+        if let Some(value) = value {
             runtime.push((key.clone(), value.clone()));
             // Also into this step's own set, so the next script in the chain sees it and
             // the re-prepared request substitutes it.
-            v.set(key.clone(), value, "script");
+            v.set(key, value, "script");
         }
     }
     tests.extend(result.test_results.iter().cloned());
@@ -1033,6 +1027,29 @@ fn absorb(
         None => {}
     }
     false
+}
+
+/// Run one script, turning a broken *engine* into a reported non-execution rather than a
+/// failed run.
+///
+/// The request itself worked; only the script didn't. Losing the response — and the rest of
+/// the chain — because the engine could not be loaded would be a worse answer than saying
+/// so and carrying on. `--strict` still turns it into a failure for anyone who wants that.
+fn execute(
+    engine: &dyn ScriptEngine,
+    input: &script::ScriptExecutionInput,
+    _label: &str,
+) -> ScriptExecutionResult {
+    match engine.execute(input) {
+        Ok(result) => result,
+        Err(e) => ScriptExecutionResult {
+            error: Some(format!(
+                "`-- {} --` was NOT executed: {e:#}",
+                input.phase.section()
+            )),
+            ..ScriptExecutionResult::default()
+        },
+    }
 }
 
 /// The variables that exist before any request is prepared: the command line, the active

@@ -197,10 +197,11 @@ the file. A markdown rule (`---`) or an em-dash sentence is never mistaken for o
 
 Unknown sections are preserved verbatim, like unknown frontmatter keys.
 
-**Scripts.** `-- pre --` and `-- post --` are parsed, carried, and round-tripped, but this
-build ships **no script engine**: every run that has one says so on stderr, and `--strict`
-fails on it. The engine is [`cross-q-context`](./CONTEXT.md); `rq` hosts it rather than
-implementing it.
+**Scripts run** on [`cross-q-context`](./CONTEXT.md) — the same QuickJS engine and the same
+`rq.*` API the Requestly app uses, hosted rather than reimplemented, so a collection behaves
+the same in both places. They need Node and a built cross-q-context (see the README); when
+that is missing, every run with a script says exactly what is missing and `--strict` fails
+on it.
 
 What the host already does, so that a script behaves the same here as in the app the day
 the engine lands:
@@ -415,8 +416,6 @@ and read back whole — it is reported, never stripped.
 
 Named so you don't have to discover it:
 
-- **Scripts** (`-- pre --` / `-- post --`) parse and round-trip, but do not execute — the
-  host side is built and tested (§6), the engine is not here yet.
 - **Editing from the browser** — bare `rq` lists the project and runs what you pick, but
   `e` to open the selected request in `$EDITOR` isn't wired yet.
 - **Terminal-width-aware tables** — columns are aligned to their content, so a table with
