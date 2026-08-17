@@ -41,6 +41,7 @@ export type {
 } from './host-types.js';
 // SSRF guard (the direct-fetch path's egress denylist) + the delegated-fetch helpers.
 export {
+  assertUrlAllowed,
   createGuardedFetch,
   createGuardedLookup,
   isAddressBlocked,

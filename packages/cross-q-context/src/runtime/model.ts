@@ -76,9 +76,34 @@ export interface KeyValue {
 /** Alias matching the app's boundary name. */
 export type ParsedKeyValue = KeyValue;
 
+// ── multipart file values (ADR-049) ──────────────────────────────────────────────────────────
+// A form-data `value` is either plain text OR an array of file entries. A `reference` carries a
+// filesystem path (metadata only — content is read at send time); a `content` carries the resolved
+// bytes (transient, produced by the desktop fetcher, consumed in-process). Ported faithfully from
+// the app's schema so `ParsedFormDataKeyValuePair` assigns to `FormDataKeyValue` at the seam.
+export interface MultipartFileReference {
+  type: 'reference';
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  source: string;
+}
+export interface MultipartFileContent {
+  type: 'content';
+  id: string;
+  name: string;
+  contents: Uint8Array;
+  size: number;
+  source: string;
+}
+export type MultipartFileValue = MultipartFileReference | MultipartFileContent;
+
 export interface FormDataKeyValue {
   key: string;
-  value: string;
+  // Text value OR an array of file references/contents (ADR-049). `string` alone was too narrow
+  // once the app added file attachments — the wider union keeps the app's parsed pair assignable.
+  value: string | MultipartFileValue[];
   // `string` (not 'text'|'file') so the app's schema type assigns at the seam.
   type: string;
 }

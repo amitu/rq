@@ -57,9 +57,26 @@ export interface KeyValue {
 }
 /** Alias matching the app's boundary name. */
 export type ParsedKeyValue = KeyValue;
+export interface MultipartFileReference {
+    type: 'reference';
+    id: string;
+    name: string;
+    path: string;
+    size: number;
+    source: string;
+}
+export interface MultipartFileContent {
+    type: 'content';
+    id: string;
+    name: string;
+    contents: Uint8Array;
+    size: number;
+    source: string;
+}
+export type MultipartFileValue = MultipartFileReference | MultipartFileContent;
 export interface FormDataKeyValue {
     key: string;
-    value: string;
+    value: string | MultipartFileValue[];
     type: string;
 }
 export interface PathVariable {
