@@ -423,9 +423,15 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         if console::available() {
             // The console navigates: its links run through the same project, options and
             // engine this run used, so following one stays in the same session.
+            // Inside the console nothing may prompt on the terminal — the alt screen is
+            // already drawing there. A form is how the console asks.
+            let console_opts = RunOptions {
+                interactive: false,
+                ..opts.clone()
+            };
             let nav = console::Nav {
                 project,
-                opts: &opts,
+                opts: &console_opts,
                 engine: &engine,
             };
             console::open(outcome.clone(), Some(nav))?;

@@ -138,6 +138,26 @@ rq r slow -e local --show timing # a server that really waits, so the phases are
 so the example, the docs and the client are checked against each other rather than against
 someone's memory of what they said.
 
+## The demo: an app whose pages are markdown files
+
+`rq-testbed` also serves a small social app — a timeline, posts, replies, likes, people —
+and `examples/app/` is a **frontend for it**, written entirely as request documents.
+
+```bash
+cargo run -p rq-testbed            # the app's backend
+cd examples/app
+rq r timeline -e local --console   # the app
+```
+
+Inside: `tab` moves between the links on the page, `enter` opens one, `backspace` goes
+back. Opening a link to a request that declares a `-- form --` — "write a post" — shows the
+form rather than firing the request; fill it, `ctrl-s`, and the timeline you return to has
+your post on it.
+
+A page is a `-- view --`. A link is `[label](rq:name?var=value)`. A form is `-- form --`.
+That is the whole vocabulary, and it is the same markdown you would have written to
+document the API.
+
 ## Docs
 
 - [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md) — the `rq` file format: the request document, the project, variables, chaining.

@@ -275,3 +275,186 @@ fn a_link_that_does_not_exist_leaves_the_page_you_are_on() {
         "a bad link must not lose the page you were reading"
     );
 }
+
+// --- the app: read a page, fill a form, change something -----------------------------------
+
+fn app_project() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/app")
+        .canonicalize()
+        .expect("examples/app is missing")
+}
+
+struct App {
+    server: rq_testbed::Server,
+    project: rq::project::Project,
+    opts: rq::run::RunOptions,
+}
+
+impl App {
+    fn new() -> App {
+        let server = rq_testbed::Server::start(0).unwrap();
+        App {
+            project: rq::project::Project::open(app_project()).unwrap(),
+            opts: rq::run::RunOptions {
+                cli_vars: vec![("host".into(), server.base_url.clone())],
+                environment: Some("local".into()),
+                ..rq::run::RunOptions::default()
+            },
+            server,
+        }
+    }
+
+    fn open(&self, name: &str) -> rq::console::Console<'_> {
+        let target = self.project.resolve(name).unwrap();
+        let run = rq::run::run(&self.project, target, &self.opts, &rq::script::NoEngine).unwrap();
+        rq::console::Console::with_nav(
+            run,
+            rq::console::Nav {
+                project: &self.project,
+                opts: &self.opts,
+                engine: &ENGINE,
+            },
+        )
+    }
+
+    fn total_posts(&self) -> u64 {
+        let target = self.project.resolve("timeline").unwrap();
+        let run = rq::run::run(&self.project, target, &self.opts, &rq::script::NoEngine).unwrap();
+        run.target()
+            .response
+            .as_ref()
+            .and_then(|r| r.json())
+            .and_then(|j| j["total"].as_u64())
+            .unwrap_or(0)
+    }
+}
+
+static ENGINE: rq::script::NoEngine = rq::script::NoEngine;
+
+fn press(console: &mut rq::console::Console<'_>, key: crossterm::event::KeyCode) {
+    console.on_key(crossterm::event::KeyEvent::from(key));
+}
+
+fn type_text(console: &mut rq::console::Console<'_>, text: &str) {
+    for c in text.chars() {
+        press(console, crossterm::event::KeyCode::Char(c));
+    }
+}
+
+#[test]
+fn the_timeline_is_a_page_you_can_post_from() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let app = App::new();
+    let before = app.total_posts();
+    let mut console = app.open("timeline");
+
+    // Every post links to itself, its author, and a like; the page ends with "write a post".
+    let compose = console
+        .links()
+        .into_iter()
+        .find(|l| l.target.starts_with("compose"))
+        .expect("the timeline should offer a way to write");
+
+    // Opening it shows the form rather than firing the request — a POST that happened
+    // because you looked at it would be a bug.
+    console.follow(compose.number);
+    let form = console.frame().join("\n");
+    assert!(form.contains("What's happening?"), "{form}");
+    assert!(
+        form.contains("Posting as") && form.contains("amitu"),
+        "the default should be resolved, not shown as a template:\n{form}"
+    );
+    assert_eq!(
+        app.total_posts(),
+        before,
+        "nothing was posted by opening it"
+    );
+
+    // Fill it in and submit.
+    type_text(&mut console, "written by a test");
+    console.on_key(crossterm::event::KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    ));
+
+    let posted = console.frame().join("\n");
+    assert!(posted.contains("Posted as"), "{posted}");
+    assert!(posted.contains("written by a test"), "{posted}");
+    assert_eq!(app.total_posts(), before + 1, "the app's state changed");
+
+    // And the new post is on the timeline, as a page again.
+    press(&mut console, KeyCode::Backspace);
+    press(&mut console, KeyCode::Backspace);
+}
+
+#[test]
+fn a_required_field_will_not_submit_empty() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let app = App::new();
+    let before = app.total_posts();
+    let mut console = app.open("timeline");
+    let compose = console
+        .links()
+        .into_iter()
+        .find(|l| l.target.starts_with("compose"))
+        .unwrap();
+    console.follow(compose.number);
+
+    console.on_key(crossterm::event::KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    ));
+    let frame = console.frame().join("\n");
+    assert!(frame.contains("is required"), "{frame}");
+    assert!(
+        frame.contains("What's happening?"),
+        "the form stays open:\n{frame}"
+    );
+    assert_eq!(app.total_posts(), before);
+}
+
+#[test]
+fn a_link_can_carry_a_value_the_form_does_not_ask_for() {
+    let app = App::new();
+    let mut console = app.open("timeline");
+    let open_first = console
+        .links()
+        .into_iter()
+        .find(|l| l.target.starts_with("post?"))
+        .unwrap();
+    console.follow(open_first.number);
+
+    // The post page offers a reply, whose form asks for text but not for `reply_to` —
+    // that rides in from the link.
+    let reply = console
+        .links()
+        .into_iter()
+        .find(|l| l.target.starts_with("reply"))
+        .expect("a post should be repliable");
+    console.follow(reply.number);
+    let frame = console.frame().join("\n");
+    assert!(frame.contains("Your reply"), "{frame}");
+    assert!(!frame.contains("reply_to"), "it is not asked for:\n{frame}");
+}
+
+#[test]
+fn the_form_also_works_without_a_terminal() {
+    let app = App::new();
+    let before = app.total_posts();
+    let out = Command::new(BIN)
+        .args(["r", "compose", "-e", "local", "--color=never", "--var"])
+        .arg(format!("host={}", app.server.base_url))
+        .args(["--var", "text=from the command line"])
+        .arg("--project")
+        .arg(app_project())
+        .env_remove("RQ_PROJECT")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("201 Created"), "{text}");
+    assert_eq!(app.total_posts(), before + 1);
+}

@@ -18,7 +18,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -135,8 +135,12 @@ impl Reply {
 
 /// Answer one request. A pure function of the request — no state, no clock, no randomness,
 /// so a test asserting on the body gets the same bytes every time.
-pub fn route(req: &Request) -> Reply {
+pub fn route(req: &Request, state: &AppState) -> Reply {
     let segments: Vec<&str> = req.path.trim_matches('/').split('/').collect();
+
+    if let Some(reply) = app_route(req, segments.as_slice(), state) {
+        return reply;
+    }
 
     match (req.method.as_str(), segments.as_slice()) {
         (_, ["health"]) => Reply::json(200, json!({ "ok": true, "service": "rq-testbed" })),
@@ -233,6 +237,196 @@ pub fn route(req: &Request) -> Reply {
             json!({ "error": "no such route", "path": req.path, "method": req.method }),
         ),
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// A small stateful app, so a demo can *do* something
+// ---------------------------------------------------------------------------------------
+
+/// The app's state. A timeline of short posts with authors and likes — enough for a client
+/// to read a list, open one item, follow its author, and write something back, which is the
+/// whole loop a hypermedia client has to prove it can do.
+///
+/// In memory, per process: this is a demo backend, and a demo that needs a database is a
+/// demo nobody runs.
+#[derive(Debug, Default)]
+pub struct App {
+    posts: Vec<Post>,
+    next_id: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Post {
+    pub id: u32,
+    pub author: String,
+    pub text: String,
+    pub likes: u32,
+    pub reply_to: Option<u32>,
+    pub at: String,
+}
+
+impl App {
+    fn seeded() -> App {
+        let mut app = App {
+            posts: Vec::new(),
+            next_id: 1,
+        };
+        for (author, text) in [
+            (
+                "amitu",
+                "shipped the console today. a request is a page now.",
+            ),
+            ("nakul", "show me the demo when it renders in a terminal"),
+            (
+                "lainamai",
+                "the markdown table alignment is doing a lot of work here",
+            ),
+            (
+                "kevinhq",
+                "wait, the *response* is the page? that's the whole idea?",
+            ),
+            (
+                "amitu",
+                "yes. one markdown file per request, links between them.",
+            ),
+        ] {
+            app.add(author, text, None);
+        }
+        // A little variety so the timeline isn't uniformly boring.
+        app.posts[2].likes = 4;
+        app.posts[4].likes = 11;
+        app
+    }
+
+    fn add(&mut self, author: &str, text: &str, reply_to: Option<u32>) -> Post {
+        let post = Post {
+            id: self.next_id,
+            author: author.to_string(),
+            text: text.to_string(),
+            likes: 0,
+            reply_to,
+            // Fixed rather than `now`: a deterministic backend makes a testable client.
+            at: format!("2026-08-17T1{}:00:00Z", self.next_id % 10),
+        };
+        self.next_id += 1;
+        self.posts.push(post.clone());
+        post
+    }
+
+    fn get(&self, id: u32) -> Option<&Post> {
+        self.posts.iter().find(|p| p.id == id)
+    }
+
+    fn replies(&self, id: u32) -> Vec<&Post> {
+        self.posts
+            .iter()
+            .filter(|p| p.reply_to == Some(id))
+            .collect()
+    }
+
+    fn by(&self, author: &str) -> Vec<&Post> {
+        self.posts.iter().filter(|p| p.author == author).collect()
+    }
+}
+
+fn post_json(post: &Post) -> Value {
+    json!({
+        "id": post.id,
+        "author": post.author,
+        "text": post.text,
+        "likes": post.likes,
+        "reply_to": post.reply_to,
+        "at": post.at,
+    })
+}
+
+/// One server's state. Not a global: two servers in one process — which is what a test
+/// binary running in parallel is — must not share a timeline.
+pub type AppState = Mutex<App>;
+
+pub fn new_state() -> Arc<AppState> {
+    Arc::new(Mutex::new(App::seeded()))
+}
+
+fn app_route(req: &Request, segments: &[&str], state: &AppState) -> Option<Reply> {
+    let mut app = state.lock().ok()?;
+    Some(match (req.method.as_str(), segments) {
+        ("GET", ["timeline"]) => {
+            let limit = req
+                .param("limit")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(20)
+                .clamp(1, 100);
+            let posts: Vec<Value> = app.posts.iter().rev().take(limit).map(post_json).collect();
+            Reply::json(200, json!({ "posts": posts, "total": app.posts.len() }))
+        }
+        ("POST", ["posts"]) => {
+            let parsed: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let text = parsed
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if text.is_empty() {
+                return Some(Reply::json(
+                    422,
+                    json!({ "error": "a post needs some text" }),
+                ));
+            }
+            if text.chars().count() > 280 {
+                return Some(Reply::json(
+                    422,
+                    json!({ "error": "280 characters, like the old days" }),
+                ));
+            }
+            let author = parsed
+                .get("author")
+                .and_then(Value::as_str)
+                .unwrap_or(USER)
+                .to_string();
+            let reply_to = parsed
+                .get("reply_to")
+                .and_then(Value::as_u64)
+                .map(|n| n as u32);
+            let post = app.add(&author, text, reply_to);
+            Reply::json(201, post_json(&post))
+        }
+        ("GET", ["posts", id]) => match id.parse::<u32>().ok().and_then(|id| app.get(id)) {
+            Some(post) => {
+                let mut value = post_json(post);
+                let replies: Vec<Value> = app.replies(post.id).into_iter().map(post_json).collect();
+                value["replies"] = Value::Array(replies);
+                Reply::json(200, value)
+            }
+            None => Reply::json(404, json!({ "error": "no such post" })),
+        },
+        ("POST", ["posts", id, "like"]) => match id.parse::<u32>().ok() {
+            Some(id) => match app.posts.iter_mut().find(|p| p.id == id) {
+                Some(post) => {
+                    post.likes += 1;
+                    Reply::json(200, post_json(&post.clone()))
+                }
+                None => Reply::json(404, json!({ "error": "no such post" })),
+            },
+            None => Reply::json(404, json!({ "error": "no such post" })),
+        },
+        ("GET", ["people", handle]) => {
+            let posts: Vec<Value> = app.by(handle).into_iter().map(post_json).collect();
+            if posts.is_empty() {
+                return Some(Reply::json(404, json!({ "error": "nobody by that name" })));
+            }
+            Reply::json(
+                200,
+                json!({
+                    "handle": handle,
+                    "posts": posts.len(),
+                    "likes": app.by(handle).iter().map(|p| p.likes).sum::<u32>(),
+                    "timeline": posts,
+                }),
+            )
+        }
+        _ => return None,
+    })
 }
 
 fn login(req: &Request) -> Reply {
@@ -424,6 +618,8 @@ pub struct Server {
     pub base_url: String,
     running: Arc<AtomicBool>,
     port: u16,
+    /// This server's timeline, readable by whoever started it.
+    pub state: Arc<AppState>,
 }
 
 impl Server {
@@ -433,6 +629,8 @@ impl Server {
         let port = listener.local_addr()?.port();
         let running = Arc::new(AtomicBool::new(true));
         let flag = Arc::clone(&running);
+        let state = new_state();
+        let serving = Arc::clone(&state);
 
         thread::spawn(move || {
             for stream in listener.incoming() {
@@ -443,8 +641,9 @@ impl Server {
                     Ok(stream) => {
                         // A thread per connection: at this scale it is the simplest thing
                         // that cannot deadlock a test.
+                        let state = Arc::clone(&serving);
                         thread::spawn(move || {
-                            let _ = serve(stream);
+                            let _ = serve(stream, &state);
                         });
                     }
                     Err(_) => break,
@@ -456,6 +655,7 @@ impl Server {
             base_url: format!("http://127.0.0.1:{port}"),
             running,
             port,
+            state,
         })
     }
 
@@ -472,7 +672,7 @@ impl Drop for Server {
     }
 }
 
-fn serve(mut stream: TcpStream) -> std::io::Result<()> {
+fn serve(mut stream: TcpStream, state: &AppState) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     if reader.read_line(&mut line)? == 0 {
@@ -516,7 +716,7 @@ fn serve(mut stream: TcpStream) -> std::io::Result<()> {
         body,
     };
 
-    let reply = route(&request);
+    let reply = route(&request, state);
     let mut head = format!("HTTP/1.1 {} {}\r\n", reply.status, reply.reason());
     for (name, value) in &reply.headers {
         head.push_str(&format!("{name}: {value}\r\n"));
@@ -599,6 +799,12 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET  /cookies/set?a=b", "sets them"),
     ("GET  /xml · /text · /html", "other content types"),
     ("GET  /bytes?n=", "n bytes of binary"),
+    ("", ""),
+    ("GET  /timeline?limit=", "the app: recent posts"),
+    ("POST /posts", "write one (text, author, reply_to)"),
+    ("GET  /posts/:id", "one post and its replies"),
+    ("POST /posts/:id/like", "like it"),
+    ("GET  /people/:handle", "someone's posts"),
 ];
 
 #[cfg(test)]
@@ -607,12 +813,15 @@ mod tests {
 
     fn get(path: &str) -> Reply {
         let (path, query) = split_target(path);
-        route(&Request {
-            method: "GET".into(),
-            path,
-            query,
-            ..Request::default()
-        })
+        route(
+            &Request {
+                method: "GET".into(),
+                path,
+                query,
+                ..Request::default()
+            },
+            &new_state(),
+        )
     }
 
     fn body(reply: &Reply) -> Value {
@@ -621,20 +830,26 @@ mod tests {
 
     #[test]
     fn login_needs_the_right_credentials_and_hands_out_both_carriers() {
-        let bad = route(&Request {
-            method: "POST".into(),
-            path: "/auth/login".into(),
-            body: br#"{"user":"amitu","pass":"wrong"}"#.to_vec(),
-            ..Request::default()
-        });
+        let bad = route(
+            &Request {
+                method: "POST".into(),
+                path: "/auth/login".into(),
+                body: br#"{"user":"amitu","pass":"wrong"}"#.to_vec(),
+                ..Request::default()
+            },
+            &new_state(),
+        );
         assert_eq!(bad.status, 401);
 
-        let ok = route(&Request {
-            method: "POST".into(),
-            path: "/auth/login".into(),
-            body: br#"{"user":"amitu","pass":"hunter2"}"#.to_vec(),
-            ..Request::default()
-        });
+        let ok = route(
+            &Request {
+                method: "POST".into(),
+                path: "/auth/login".into(),
+                body: br#"{"user":"amitu","pass":"hunter2"}"#.to_vec(),
+                ..Request::default()
+            },
+            &new_state(),
+        );
         assert_eq!(ok.status, 200);
         assert_eq!(body(&ok)["access_token"], TOKEN);
         assert!(ok
@@ -645,20 +860,26 @@ mod tests {
 
     #[test]
     fn me_accepts_either_the_token_or_the_cookie_and_says_which() {
-        let with_token = route(&Request {
-            method: "GET".into(),
-            path: "/me".into(),
-            headers: vec![("Authorization".into(), format!("Bearer {TOKEN}"))],
-            ..Request::default()
-        });
+        let with_token = route(
+            &Request {
+                method: "GET".into(),
+                path: "/me".into(),
+                headers: vec![("Authorization".into(), format!("Bearer {TOKEN}"))],
+                ..Request::default()
+            },
+            &new_state(),
+        );
         assert_eq!(body(&with_token)["authenticated_via"], "bearer");
 
-        let with_cookie = route(&Request {
-            method: "GET".into(),
-            path: "/me".into(),
-            headers: vec![("Cookie".into(), format!("session={SESSION}"))],
-            ..Request::default()
-        });
+        let with_cookie = route(
+            &Request {
+                method: "GET".into(),
+                path: "/me".into(),
+                headers: vec![("Cookie".into(), format!("session={SESSION}"))],
+                ..Request::default()
+            },
+            &new_state(),
+        );
         assert_eq!(body(&with_cookie)["authenticated_via"], "cookie");
 
         assert_eq!(get("/me").status, 401);
@@ -666,13 +887,16 @@ mod tests {
 
     #[test]
     fn echo_mirrors_what_arrived() {
-        let reply = route(&Request {
-            method: "POST".into(),
-            path: "/echo".into(),
-            query: vec![("a".into(), "1".into())],
-            headers: vec![("X-Trace".into(), "abc".into())],
-            body: b"hello".to_vec(),
-        });
+        let reply = route(
+            &Request {
+                method: "POST".into(),
+                path: "/echo".into(),
+                query: vec![("a".into(), "1".into())],
+                headers: vec![("X-Trace".into(), "abc".into())],
+                body: b"hello".to_vec(),
+            },
+            &new_state(),
+        );
         let v = body(&reply);
         assert_eq!(v["method"], "POST");
         assert_eq!(v["query"][0]["key"], "a");
@@ -706,31 +930,37 @@ mod tests {
 
     #[test]
     fn form_and_multipart_are_reported_field_by_field() {
-        let form = route(&Request {
-            method: "POST".into(),
-            path: "/form".into(),
-            body: b"q=rust+lang&page=2".to_vec(),
-            ..Request::default()
-        });
+        let form = route(
+            &Request {
+                method: "POST".into(),
+                path: "/form".into(),
+                body: b"q=rust+lang&page=2".to_vec(),
+                ..Request::default()
+            },
+            &new_state(),
+        );
         assert_eq!(body(&form)["form"]["q"], "rust lang");
         assert_eq!(body(&form)["form"]["page"], "2");
 
-        let multipart = route(&Request {
-            method: "POST".into(),
-            path: "/upload".into(),
-            headers: vec![(
-                "Content-Type".into(),
-                "multipart/form-data; boundary=XYZ".into(),
-            )],
-            body: concat!(
+        let multipart = route(
+            &Request {
+                method: "POST".into(),
+                path: "/upload".into(),
+                headers: vec![(
+                    "Content-Type".into(),
+                    "multipart/form-data; boundary=XYZ".into(),
+                )],
+                body: concat!(
                 "--XYZ\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\nhello\r\n",
                 "--XYZ\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"cat.png\"\r\n",
                 "Content-Type: application/octet-stream\r\n\r\nBINARY\r\n--XYZ--\r\n"
             )
-            .as_bytes()
-            .to_vec(),
-            query: Vec::new(),
-        });
+                .as_bytes()
+                .to_vec(),
+                query: Vec::new(),
+            },
+            &new_state(),
+        );
         let v = body(&multipart);
         assert_eq!(v["count"], 2);
         assert_eq!(v["parts"][0]["name"], "caption");
@@ -745,12 +975,15 @@ mod tests {
         assert_eq!(get("/api-key").status, 401);
         assert_eq!(get(&format!("/api-key?api_key={API_KEY}")).status, 200);
 
-        let header = route(&Request {
-            method: "GET".into(),
-            path: "/basic-auth".into(),
-            headers: vec![("Authorization".into(), "Basic YW1pdHU6aHVudGVyMg==".into())],
-            ..Request::default()
-        });
+        let header = route(
+            &Request {
+                method: "GET".into(),
+                path: "/basic-auth".into(),
+                headers: vec![("Authorization".into(), "Basic YW1pdHU6aHVudGVyMg==".into())],
+                ..Request::default()
+            },
+            &new_state(),
+        );
         assert_eq!(header.status, 200);
     }
 
