@@ -7,6 +7,8 @@
 //
 // quickjs-emscripten-core is a TYPE-only import here (erased at build); the actual WASM variant is
 // pulled in by the host layer, so consumers of these primitives take on no WASM weight.
+// The execute entry — run a (transformed) rq.* script safely in QuickJS and get its result.
+export { executeScript } from './execute.js';
 export { dumpHandle, marshalToHandle } from './isolated/marshal.js';
 export { createSafeBridge, createIgnoredBridge, pendingAsyncCalls } from './isolated/safe-bridge-factory.js';
 export { dlog, isDebugEnabled } from './isolated/debug-log.js';
