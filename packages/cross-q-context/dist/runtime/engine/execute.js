@@ -21,6 +21,7 @@ import { UTIL_ISOLATE_SHIM } from './isolated/shims/util.shim.js';
 import { ZLIB_ISOLATE_SHIM } from './isolated/shims/zlib.shim.js';
 import { FETCH_ISOLATE_SHIM } from './isolated/shims/fetch.shim.js';
 import { createFetchBridge } from './fetch-bridge.js';
+import { createInMemoryCookieJarBridge } from './cookies.js';
 import { createTimerBridges } from './isolated/bridges/timer-bridge.js';
 import { AsyncRegistry } from './async-registry.js';
 import { pendingAsyncCalls } from './isolated/safe-bridge-factory.js';
@@ -137,6 +138,43 @@ export async function executeScript(input) {
             fetchBridge.install(ctx);
             installedGlobals.push(fetchBridge.name);
         }
+        // Cookie jar (ADR-105). Sync host callback: the guest calls __rq_cookies({op, host, …}) and
+        // gets copied data; the in-memory jar accumulates mutations, drained after the script. Access
+        // is gated to the host allowlist (rq.cookies.jar(host) throws otherwise). The execution
+        // context's seed shape matches the jar's structurally (Json[] vs ScriptCookieSnapshot[]).
+        const cookieJar = createInMemoryCookieJarBridge(input.context.cookieJarSeed);
+        const cookieAllowlist = new Set((input.context.hostAllowlist ?? []).map((h) => h.toLowerCase()));
+        const cookieFn = ctx.newFunction('__rq_cookies', (argsHandle) => {
+            const raw = ctx.dump(argsHandle);
+            if (!raw || typeof raw !== 'object')
+                return marshalToHandle(ctx, { error: 'invalid cookie args' });
+            const args = raw;
+            const op = typeof args['op'] === 'string' ? args['op'] : '';
+            const host = typeof args['host'] === 'string' ? args['host'] : '';
+            if (!host || !cookieAllowlist.has(host.toLowerCase())) {
+                return marshalToHandle(ctx, { error: `CookieStore: programmatic access to "${host}" is denied.` });
+            }
+            if (op === 'list')
+                return marshalToHandle(ctx, { result: cookieJar.bridge.list(host) });
+            if (op === 'upsert') {
+                cookieJar.bridge.upsert(host, args['cookie']);
+                return marshalToHandle(ctx, { result: args['cookie'] });
+            }
+            if (op === 'remove') {
+                const name = typeof args['name'] === 'string' ? args['name'] : '';
+                const path = typeof args['path'] === 'string' ? args['path'] : '/';
+                cookieJar.bridge.remove(host, name, path);
+                return marshalToHandle(ctx, { result: null });
+            }
+            if (op === 'clear') {
+                cookieJar.bridge.clear(host);
+                return marshalToHandle(ctx, { result: null });
+            }
+            return marshalToHandle(ctx, { error: 'unknown cookie op' });
+        });
+        ctx.setProp(ctx.global, '__rq_cookies', cookieFn);
+        cookieFn.dispose();
+        installedGlobals.push('__rq_cookies');
         // Copy the context + phase + cookie-jar allowlist in as strings (nothing live crosses).
         setStringGlobal(ctx, '__rq_context_json', JSON.stringify(input.context));
         setStringGlobal(ctx, '__rq_phase', input.phase);
@@ -203,6 +241,9 @@ export async function executeScript(input) {
             result.executionDirective = collected.executionDirective;
         if (collected.visualizerOutput)
             result.visualizerOutput = collected.visualizerOutput;
+        const cookieMutations = cookieJar.drainMutations();
+        if (cookieMutations.length > 0)
+            result.cookieMutations = cookieMutations;
         if (userError && result.executionDirective?.kind !== 'skip-request')
             result.error = userError;
         return result;
