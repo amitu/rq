@@ -101,14 +101,15 @@ export interface RuntimeComponent {
     getFeatures(): Promise<FeatureFlags>;
 }
 /** A pull reader over a stream of events (a subset of the async-iterator protocol). */
+export type StreamReadResult<T> = {
+    done: false;
+    value: T;
+} | {
+    done: true;
+    value?: undefined;
+};
 export interface StreamReader<T> {
-    read(): Promise<{
-        done: false;
-        value: T;
-    } | {
-        done: true;
-        value?: undefined;
-    }>;
+    read(): Promise<StreamReadResult<T>>;
     cancel?(): Promise<void>;
 }
 /** Live events emitted during execution: logs stream as they happen, the result is terminal. */

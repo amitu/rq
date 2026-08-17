@@ -20,6 +20,11 @@ export { createRunRequestBridge, RUN_REQUEST_ISOLATE_SHIM } from './isolated/bri
 export { STREAM_ISOLATE_SHIM } from './isolated/bridges/stream-bridge.js';
 export { createDeprecationBridge, DEPRECATION_ISOLATE_SHIM, WARN_ONLY_IDENTIFIERS, DEPRECATION_SHIMMED_IDENTIFIERS, } from './isolated/bridges/deprecation-bridge.js';
 export { createTimerBridges } from './isolated/bridges/timer-bridge.js';
+export { createBufferBridge } from './isolated/bridges/buffer-bridge.js';
+export { createCryptoBridge } from './isolated/bridges/crypto-bridge.js';
+export { createUtilBridge } from './isolated/bridges/util-bridge.js';
+export { createZlibBridge } from './isolated/bridges/zlib-bridge.js';
+export { StreamHandle } from './stream-handle.js';
 export { AsyncRegistry } from './async-registry.js';
 export type { TimerDelegations, AsyncRegistryOptions, SettleFn } from './async-registry.js';
 export { SANDBOX_DEFAULT_TIMEOUT_MS } from './constants.js';
