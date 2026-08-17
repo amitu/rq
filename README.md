@@ -94,9 +94,12 @@ rq r issues        # run it — anytime, from anywhere in the project
 rq e issues        # open it in $EDITOR
 rq l               # the tree: every request, its method, what it depends on
 rq r me -c         # the console: arrow between the steps of a run, drill into each
+rq                 # bare: the project's requests, pick one and run it
 ```
 
-In the console, a digit opens that link and `backspace` goes back — the run you are
+Bare `rq` in a terminal opens the project itself: every request it holds, arrow to one,
+`enter` to run it. From any page, `l` brings that list back with the cursor on where you
+are. In the console, a digit opens a link and `backspace` goes back — the run you are
 reading becomes a place you can move around in. It is also the browser network panel for
 your terminal — every step of the run, its
 request, its response, its headers, and where the milliseconds actually went — over the run

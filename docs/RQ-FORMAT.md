@@ -408,8 +408,8 @@ Named so you don't have to discover it:
 
 - **Scripts** (`-- pre --` / `-- post --`) parse and round-trip, but do not execute — the
   host side is built and tested (§6), the engine is not here yet.
-- **The interactive project browser** — bare `rq` prints the tree; it doesn't yet let you
-  arrow around it, run, or edit from there. (The *post-run* console is real: `rq r x -c`.)
+- **Editing from the browser** — bare `rq` lists the project and runs what you pick, but
+  `e` to open the selected request in `$EDITOR` isn't wired yet.
 - **Terminal-width-aware tables** — columns are aligned to their content, so a table with
   very long cells is wider than an 80-column window and wraps. Nothing is truncated;
   narrow the column in the template (`{{ i.title | truncate(60) }}`) if you want it short.

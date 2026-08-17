@@ -458,3 +458,59 @@ fn the_form_also_works_without_a_terminal() {
     assert!(text.contains("201 Created"), "{text}");
     assert_eq!(app.total_posts(), before + 1);
 }
+
+// --- the request list ----------------------------------------------------------------------
+
+#[test]
+fn the_console_lists_the_projects_requests_and_opens_one() {
+    use crossterm::event::KeyCode;
+
+    let app = App::new();
+    let mut console = app.open("timeline");
+
+    // `l` shows the project, with the cursor on the page you are reading.
+    press(&mut console, KeyCode::Char('l'));
+    let listing = console.frame().join("\n");
+    assert!(listing.contains("6 requests"), "{listing}");
+    for expected in ["timeline", "compose", "post", "person"] {
+        assert!(
+            listing.contains(expected),
+            "{expected} missing from:\n{listing}"
+        );
+    }
+    assert!(
+        listing
+            .lines()
+            .any(|l| l.contains('▸') && l.contains("timeline")),
+        "the cursor should be on the current page:\n{listing}"
+    );
+
+    // Move to another request and open it.
+    press(&mut console, KeyCode::Home);
+    press(&mut console, KeyCode::Enter);
+    // `compose` is first alphabetically and declares a form, so opening it shows the form
+    // rather than posting — the same rule links follow.
+    let frame = console.frame().join("\n");
+    assert!(frame.contains("What's happening?"), "{frame}");
+}
+
+#[test]
+fn a_project_browser_starts_with_no_page_at_all() {
+    let app = App::new();
+    let mut console = rq::console::Console::browser(rq::console::Nav {
+        project: &app.project,
+        opts: &app.opts,
+        engine: &ENGINE,
+    });
+    let frame = console.frame().join("\n");
+    assert!(frame.contains("6 requests"), "{frame}");
+    assert!(frame.contains("enter open"), "{frame}");
+
+    // Opening one from a standing start gives you a page.
+    for _ in 0..5 {
+        press(&mut console, crossterm::event::KeyCode::Down);
+    }
+    press(&mut console, crossterm::event::KeyCode::Enter);
+    let page = console.frame().join("\n");
+    assert!(page.contains("Timeline ·"), "{page}");
+}
