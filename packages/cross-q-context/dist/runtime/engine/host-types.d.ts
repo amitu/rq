@@ -75,6 +75,33 @@ export type CookieJarMutation = {
     kind: 'clear';
     host: string;
 };
+/** How a fetch response body is encoded in the flat `body` string (ADR-153): base64 for binary. */
+export type BodyEncoding = 'utf8' | 'base64';
+/** The request the guest hands out for the host to perform (copy-in; nothing live crosses). A
+ * `type` (not `interface`) so it structurally satisfies the bridge's Copyable index-signature. */
+export type FetchRequestData = {
+    readonly url: string;
+    readonly method: string;
+    readonly headers: {
+        readonly [key: string]: string;
+    };
+    readonly body?: string;
+};
+/** The response the host hands back (copy-out). `type` for the same Copyable reason. */
+export type FetchResponseData = {
+    readonly status: number;
+    readonly statusText: string;
+    readonly headers: {
+        readonly [key: string]: string;
+    };
+    readonly body: string;
+    readonly bodyEncoding: BodyEncoding;
+};
+/** The host capability that actually performs a sandbox script's fetch (rq.sendRequest / the guest
+ * `fetch`). cross-q-context delegates every request out to this — it makes no network call itself,
+ * so egress/SSRF policy stays with the host. A rejection's message is the only channel the script
+ * sees, so throw a bounded, non-request-derived message. */
+export type SendRequestFn = (request: FetchRequestData) => Promise<FetchResponseData>;
 /** An error from one iteration of an on-message batch, tagged with the message it came from. */
 export interface ScriptMessageError {
     readonly messageIndex: number;
