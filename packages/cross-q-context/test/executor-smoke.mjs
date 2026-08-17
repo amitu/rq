@@ -19,6 +19,15 @@ import {
   UTIL_ISOLATE_SHIM,
   ZLIB_ISOLATE_SHIM,
   RQ_ISOLATE_SHIM,
+  CONSOLE_ISOLATE_SHIM,
+  PROCESS_ISOLATE_SHIM,
+  RUN_REQUEST_ISOLATE_SHIM,
+  STREAM_ISOLATE_SHIM,
+  DEPRECATION_ISOLATE_SHIM,
+  createConsoleBridge,
+  createTimerBridges,
+  AsyncRegistry,
+  SANDBOX_DEFAULT_TIMEOUT_MS,
 } from '../dist/runtime/engine/index.js';
 
 let passed = 0;
@@ -78,6 +87,11 @@ try {
     ['UTIL_ISOLATE_SHIM', UTIL_ISOLATE_SHIM],
     ['ZLIB_ISOLATE_SHIM', ZLIB_ISOLATE_SHIM],
     ['RQ_ISOLATE_SHIM', RQ_ISOLATE_SHIM],
+    ['CONSOLE_ISOLATE_SHIM', CONSOLE_ISOLATE_SHIM],
+    ['PROCESS_ISOLATE_SHIM', PROCESS_ISOLATE_SHIM],
+    ['RUN_REQUEST_ISOLATE_SHIM', RUN_REQUEST_ISOLATE_SHIM],
+    ['STREAM_ISOLATE_SHIM', STREAM_ISOLATE_SHIM],
+    ['DEPRECATION_ISOLATE_SHIM', DEPRECATION_ISOLATE_SHIM],
   ];
   for (const [label, src] of shims) {
     assert.equal(typeof src, 'string', `${label} is a string`);
@@ -99,7 +113,20 @@ try {
     ok(`guest-side realm string parses in QuickJS: ${label}`);
   }
 
-  console.log(`\nExecutor smoke OK — ${passed} checks. Isolate primitives + guest realm strings run in QuickJS from cross-q-context.`);
+  // 6. Capability bridges + async support are importable and construct.
+  assert.equal(typeof createConsoleBridge, 'function', 'createConsoleBridge exported');
+  assert.equal(typeof createTimerBridges, 'function', 'createTimerBridges exported');
+  const logs = [];
+  const consoleBridge = createConsoleBridge((e) => logs.push(e), () => 0);
+  assert.ok(consoleBridge && typeof consoleBridge === 'object', 'console bridge constructs');
+  ok('console bridge constructs');
+  const registry = new AsyncRegistry();
+  assert.ok(registry && typeof registry === 'object', 'AsyncRegistry constructs');
+  ok('AsyncRegistry constructs');
+  assert.equal(typeof SANDBOX_DEFAULT_TIMEOUT_MS, 'number', 'SANDBOX_DEFAULT_TIMEOUT_MS is a number');
+  ok('constants importable');
+
+  console.log(`\nExecutor smoke OK — ${passed} checks. Isolate primitives + guest realm + capability bridges run in QuickJS from cross-q-context.`);
 } finally {
   ctx.dispose();
 }

@@ -22,3 +22,11 @@ export var ScriptExecutionMode;
     ScriptExecutionMode["safe"] = "safe";
     ScriptExecutionMode["developer"] = "developer";
 })(ScriptExecutionMode || (ScriptExecutionMode = {}));
+/** The `console.*` methods captured during execution. */
+export var LogLevel;
+(function (LogLevel) {
+    LogLevel["log"] = "log";
+    LogLevel["warn"] = "warn";
+    LogLevel["error"] = "error";
+    LogLevel["info"] = "info";
+})(LogLevel || (LogLevel = {}));
