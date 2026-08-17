@@ -324,36 +324,41 @@ column-aligned tables. `--raw` prints the response body instead.
 
 ```
 my-apis/
-├── __requestly.json          # project marker: { version, include[], exclude[] }
-├── apis/
-│   ├── issues/__metadata.md  # a request
-│   └── github/               # a collection — just a directory
-│       ├── __collection.md   # optional: shared headers / auth / vars / description
-│       ├── login/__metadata.md
-│       └── me/__metadata.md
-├── environments/
-│   ├── __global.md
-│   └── staging.md
-└── .requestly/state.json     # the active environment (machine-local, gitignored)
+├── rq.toml          the project marker — discovery walks up to it, git-style
+├── issues.md        a request
+├── github/          a collection — just a directory
+│   ├── index.md     its shared headers / auth / vars, and its landing page
+│   ├── login.md
+│   └── me.md
+├── env/
+│   └── staging.md   a named environment, for `-e staging`
+├── .env             the always-on variable layer
+└── .rq/             machine-local state (the active environment); gitignored
 ```
 
+Three rules, and there is nothing else to learn:
+
+- **A request is a file** — one markdown file, named for the request. `github/login.md` is
+  `rq r github/login`, or just `rq r login` when the name is unambiguous.
+- **A collection is a directory.** Its `index.md` holds what it shares with everything
+  beneath it — headers, auth, variables, scripts — and if that file has a `url:`, the
+  collection *is* also a request: `rq r github` opens its landing page.
+- **Anything else is yours.** A `.md` with no frontmatter is documentation, so your README
+  and your notes live next to the requests they describe. A file with frontmatter but no
+  `url:` is reported rather than ignored, because that one is probably a mistake.
+
 `rq` finds the project the way `git` finds a repo: walk up from the cwd looking for
-`__requestly.json`. `RQ_PROJECT` and `--project <dir>` override that.
+`rq.toml`. `RQ_PROJECT` and `--project <dir>` override that. `rq init` writes that one file
+and a `.gitignore`; it does not scatter empty directories.
 
 **The tree is the hierarchy.** A request's collection is the directory above it; nothing
-stores a parent id, so `git mv` is a legal way to reorganize. `__`-prefixed directories are
-`rq`'s own and are never entities.
+stores a parent id, so `git mv` is a legal way to reorganize.
 
-`apis/__collection.md` is the **project-wide** one: `apis/` is not itself a request or a
-collection you can name, so that file is where "every request in this project sends these
-headers" goes. Below it, each `__collection.md` uses the same frontmatter, and its
-`headers`, `auth`, and `vars` are inherited by every request beneath it — nearer collections win, and a request always wins
-over its collections. Its `-- pre --` / `-- post --` sections run around every request
-beneath it too (§6).
-
-**Environments** are the same document with only a `vars:` block, so there is one format to
-learn. `__global.md` is the global environment; it applies under whichever environment is
-active.
+**Variables come from two places.** `.env` — `KEY=value`, `#` comments, an optional
+`export` — is always loaded, so a project with one set of values needs nothing else and
+your secrets stay in the file every tool already ignores. Named environments in `env/*.md`
+are for switching between targets, and they are ordinary documents with a `vars:` block, so
+they can carry `secret: true` (which is what powers masking) and a description:
 
 ```markdown
 ---
@@ -361,9 +366,11 @@ vars:
   host: https://staging.example.com
   TOKEN: { env: STAGING_TOKEN, secret: true }
 ---
-```
 
----
+-- description --
+
+Staging. `TOKEN` comes from your shell, never from this file.
+```
 
 ## 9. Converting in and out
 
@@ -377,8 +384,8 @@ cq convert ./my-apis --to bruno   --output ./out
 cq convert ./my-apis --to requestly --output ./out   # the Requestly LOCAL_FS tree
 ```
 
-A directory is detected as an `rq` project by its `__requestly.json` (or any
-`__metadata.md`); a lone `.md` file with frontmatter is read as a single request. `rq
+A directory is detected as an `rq` project by its `rq.toml` (or any
+the request's `.md` file); a lone `.md` file with frontmatter is read as a single request. `rq
 import` calls exactly this — the CLI owns no conversion of its own.
 
 Two gates hold the pair honest, both in `crates/cross-q/tests/rq_format.rs`:

@@ -59,7 +59,7 @@ pub fn curl_to_workspace(input: &str, report: &mut Report) -> Result<Workspace, 
         depends_on: Vec::new(),
         behavior: Default::default(),
     };
-    // An unnamed root collection => the request lands directly under apis/.
+    // An unnamed root collection => the request lands at the top of the project.
     let root = Collection {
         meta: RecordMeta::new("cq-root", "", SourceFormat::Curl),
         items: vec![Item::Request(Box::new(request))],

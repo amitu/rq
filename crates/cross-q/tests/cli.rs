@@ -100,12 +100,12 @@ fn convert_curl_to_rq_writes_a_project_you_can_read() {
         .unwrap();
     assert!(status.success(), "cq convert --to rq failed");
 
-    assert!(dir.path().join("__requestly.json").is_file());
-    let doc = std::fs::read_dir(dir.path().join("apis"))
+    assert!(dir.path().join("rq.toml").is_file());
+    let doc = std::fs::read_dir(dir.path())
         .unwrap()
         .flatten()
-        .map(|e| e.path().join("__metadata.md"))
-        .find(|p| p.is_file())
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "md"))
         .expect("no request document written");
     let text = std::fs::read_to_string(&doc).unwrap();
     assert!(text.contains("method: POST"), "{text}");

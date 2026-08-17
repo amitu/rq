@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::project::{APIS_DIR, REQUEST_FILE};
+use rq_doc::layout;
 
 /// Write an emitted project map under `root`, returning the requests it created (paths
 /// below `apis/`, in tree order).
@@ -23,7 +23,7 @@ pub fn write_project(map: &BTreeMap<String, String>, root: &Path) -> Result<Vec<
         }
         // The marker is a project's identity, not a document: never overwrite one that a
         // person may have edited (include/exclude globs live there).
-        if rel == crate::project::MARKER && path.exists() {
+        if rel == layout::MARKER && path.exists() {
             continue;
         }
         std::fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
@@ -34,11 +34,14 @@ pub fn write_project(map: &BTreeMap<String, String>, root: &Path) -> Result<Vec<
     Ok(written)
 }
 
-/// `apis/github/issues/__metadata.md` → `github/issues`.
+/// `github/issues.md` → `github/issues`. `index.md` belongs to its collection, not to a
+/// request of its own.
 fn request_rel(path: &str) -> Option<String> {
-    let inner = path.strip_prefix(&format!("{APIS_DIR}/"))?;
-    let rel = inner.strip_suffix(&format!("/{REQUEST_FILE}"))?;
-    Some(rel.to_string())
+    let file = path.rsplit('/').next()?;
+    if !layout::is_request_file(file) {
+        return None;
+    }
+    layout::request_name(path).map(str::to_string)
 }
 
 /// Guess the source format for `rq import`, the way a person would: by looking.

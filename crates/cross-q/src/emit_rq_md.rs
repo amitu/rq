@@ -55,11 +55,19 @@ pub fn to_rq_md(ws: &Workspace, report: &mut Report) -> BTreeMap<String, String>
     }
 
     for env in &ws.environments {
-        let name = if env.is_global {
-            layout::GLOBAL_ENV.to_string()
-        } else {
-            layout::slug_segment(&env.meta.name, "environment")
-        };
+        // The global environment becomes the always-on layer, and that is a `.env` — the
+        // file every project already has one of.
+        if env.is_global {
+            let mut lines = String::from("# The always-on variable layer.\n");
+            for var in &env.variables {
+                if !var.key.is_empty() {
+                    lines.push_str(&format!("{}={}\n", var.key, var.value));
+                }
+            }
+            out.insert(layout::DOTENV.to_string(), lines);
+            continue;
+        }
+        let name = layout::slug_segment(&env.meta.name, "environment");
         out.insert(
             layout::environment_path(&name),
             environment_doc(env).write(),

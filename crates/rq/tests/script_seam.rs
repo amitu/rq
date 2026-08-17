@@ -79,12 +79,7 @@ impl Fixture {
     }
 
     fn write(&self, rel: &str, contents: &str) {
-        let path = self
-            .dir
-            .path()
-            .join(project::APIS_DIR)
-            .join(rel)
-            .join(project::REQUEST_FILE);
+        let path = self.dir.path().join(format!("{rel}.md"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, contents).unwrap();
     }
@@ -436,12 +431,7 @@ fn the_shipped_build_reports_that_the_script_never_ran() {
 
 impl Fixture {
     fn write_collection(&self, rel: &str, contents: &str) {
-        let path = self
-            .dir
-            .path()
-            .join(project::APIS_DIR)
-            .join(rel)
-            .join(project::COLLECTION_FILE);
+        let path = self.dir.path().join(rel).join(project::COLLECTION_FILE);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, contents).unwrap();
     }
