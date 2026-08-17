@@ -6,6 +6,10 @@ vars:
   per_page: 5
 ---
 
+-- description --
+
+Recent releases, with their notes rendered.
+
 -- view --
 
 # Releases

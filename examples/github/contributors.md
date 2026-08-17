@@ -6,6 +6,10 @@ vars:
   per_page: 15
 ---
 
+-- description --
+
+Who has committed here, and how much.
+
 -- view --
 
 # Contributors

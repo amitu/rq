@@ -172,6 +172,21 @@ impl Document {
         Ok((Document { front, sections }, notes))
     }
 
+    /// The request in a few words: the first non-empty line of `-- description --`.
+    ///
+    /// One definition, used by every place that has to name a request to a person — the
+    /// project list, the console, a form's title — so they cannot describe the same request
+    /// differently.
+    pub fn summary(&self) -> Option<String> {
+        self.section("description")?
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            // A heading is still a summary; the `#` is markup, not part of the words.
+            .map(|line| line.trim_start_matches('#').trim().to_string())
+            .filter(|line| !line.is_empty())
+    }
+
     pub fn section(&self, name: &str) -> Option<&str> {
         self.sections
             .iter()
@@ -1124,5 +1139,32 @@ mod form_tests {
         let (doc, _) = Document::parse(DOC).unwrap();
         let (again, _) = Document::parse(&doc.write()).unwrap();
         assert_eq!(doc.form().unwrap(), again.form().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    #[test]
+    fn the_summary_is_the_first_line_of_the_description() {
+        let src = "---\nurl: u\n---\n\n-- description --\n\nWrite a post.\n\nAnd more detail\nbelow it.\n";
+        let (doc, _) = Document::parse(src).unwrap();
+        assert_eq!(doc.summary().as_deref(), Some("Write a post."));
+    }
+
+    #[test]
+    fn a_heading_is_still_a_summary() {
+        let src = "---\nurl: u\n---\n\n-- description --\n\n# Compose\n\nwords\n";
+        let (doc, _) = Document::parse(src).unwrap();
+        assert_eq!(doc.summary().as_deref(), Some("Compose"));
+    }
+
+    #[test]
+    fn no_description_is_no_summary() {
+        let (doc, _) = Document::parse("---\nurl: u\n---\n").unwrap();
+        assert_eq!(doc.summary(), None);
+        let (blank, _) = Document::parse("---\nurl: u\n---\n\n-- description --\n\n\n").unwrap();
+        assert_eq!(blank.summary(), None);
     }
 }

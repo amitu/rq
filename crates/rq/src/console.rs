@@ -705,10 +705,7 @@ fn form_of(
         return Ok(None);
     }
     resolve_defaults(&mut fields, page_vars);
-    let title = doc
-        .section("description")
-        .and_then(|d| d.lines().next().map(str::to_string))
-        .unwrap_or_else(|| rel.to_string());
+    let title = doc.summary().unwrap_or_else(|| rel.to_string());
     Ok(Some(FormState::new(rel.to_string(), title, fields)))
 }
 
@@ -729,6 +726,8 @@ pub struct ListRow {
     pub name: String,
     pub method: String,
     pub url: String,
+    /// What the request says it is. A templated URL tells you far less.
+    pub summary: Option<String>,
     pub depth: usize,
     /// A collection's landing page reads differently from a request under it.
     pub is_index: bool,
@@ -739,15 +738,16 @@ impl ListState {
         let rows = project
             .requests()
             .map(|(idx, entry)| {
-                let (method, url) = project
+                let (method, url, summary) = project
                     .load(idx)
                     .map(|(doc, _)| {
                         (
                             doc.front.method.clone().unwrap_or_else(|| "GET".into()),
                             doc.front.url.clone().unwrap_or_default(),
+                            doc.summary(),
                         )
                     })
-                    .unwrap_or_else(|_| ("?".into(), String::new()));
+                    .unwrap_or_else(|_| ("?".into(), String::new(), None));
                 ListRow {
                     depth: entry.rel.matches('/').count(),
                     is_index: entry.kind == crate::project::Kind::Collection,
@@ -755,6 +755,7 @@ impl ListState {
                     name: entry.name.clone(),
                     method,
                     url,
+                    summary,
                 }
             })
             .collect();
@@ -798,11 +799,13 @@ impl ListState {
             };
             let pad = name_width.saturating_sub(shown.chars().count());
             let room = width.saturating_sub(name_width + 14);
+            // What it is, if it says; otherwise where it goes.
+            let about = row.summary.clone().unwrap_or_else(|| row.url.clone());
             out.push(format!(
                 "{marker} {label}{} {:<6} {}",
                 " ".repeat(pad),
                 ui::dim(&row.method),
-                ui::dim(&truncate(&row.url, room.max(20)))
+                ui::dim(&truncate(&about, room.max(20)))
             ));
         }
         out

@@ -6,6 +6,10 @@ vars:
   per_page: 10
 ---
 
+-- description --
+
+What you have starred recently.
+
 -- view --
 
 # Recently starred

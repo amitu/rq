@@ -6,6 +6,10 @@ vars:
   per_page: 10
 ---
 
+-- description --
+
+The last few commits, newest first.
+
 -- view --
 
 # Recent commits

@@ -4,6 +4,10 @@ vars:
   number: { prompt: "PR number", required: true }
 ---
 
+-- description --
+
+One pull request: what it changes, and where it wants to land.
+
 -- view --
 
 # #{{ response.number }} · {{ response.title }}
