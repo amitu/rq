@@ -31,7 +31,7 @@ holistic (all of a version's features in one go), not feature-by-feature.
 | **Postman** | Collection v2.0.0 | ✅ | 🔜 | object-shaped auth |
 | **Postman** | Collection v1.0.0 | ✅ | 🔜 | legacy flat `requests[]`/`folders[]` |
 | **cURL** | command line | ✅ | 🔜 | single command ↔ request |
-| **rq** | project (`__metadata.md`) | ✅ | ✅ | the format the `rq` CLI reads — one Markdown file per request; round-trip proven by IR-idempotence |
+| **rq** | project (`*.md` + `rq.toml`) | ✅ | ✅ | the format the `rq` CLI reads — one Markdown file per request; round-trip proven by IR-idempotence |
 | **Requestly** | `LOCAL_FS` 1.12.0 | 🔜 | ✅ | the app's split-JSON tree (`--to requestly`) |
 | **Requestly** | `MappedItems` (bulk-create) | — | ✅ | the app's in-memory import contract |
 | **Requestly** | export envelope 1.1.0 | 🔜 | 🔜 | single-file export |
@@ -102,7 +102,7 @@ your terminal — every step of the run, its
 request, its response, its headers, and where the milliseconds actually went — over the run
 you already did. Nothing is re-sent, and there is no second `--verbose` pass.
 
-Each request is **one Markdown file** — frontmatter plus `-- description --`,
+Each request is **one Markdown file** — `github/login.md`, no wrapper directory — — frontmatter plus `-- description --`,
 `-- view --`, `-- body --`, `-- pre --`, `-- post --` sections. The `-- view --` template
 renders the response as markdown in your terminal, which is the thing no other client in
 this category does. Dependencies are declared per request (`parents: [login]`) and the

@@ -28,9 +28,7 @@ use crate::doc::{Document, Note};
 
 // The layout itself is defined in `rq-doc`, so the converter writes the same tree the CLI
 // reads. Re-exported here because this is where the rest of the CLI looks for it.
-pub use rq_doc::layout::{
-    APIS_DIR, COLLECTION_FILE, ENVS_DIR, GLOBAL_ENV, MARKER, REQUEST_FILE, STATE_DIR,
-};
+pub use rq_doc::layout::{COLLECTION_FILE, DOTENV, ENVS_DIR, MARKER, STATE_DIR};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -51,15 +49,31 @@ pub struct Entry {
     pub name: String,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
+    /// A collection whose `index.md` has a `url:` — its landing page, runnable by the
+    /// collection's own name. Always true for a request.
+    pub runnable: bool,
 }
 
 impl Entry {
-    /// The file that defines this entity, if it has one. A collection folder without a
-    /// `__collection.md` is a perfectly good collection — it just has nothing to say.
+    /// The file that defines this entity. A collection without an `index.md` is a perfectly
+    /// good collection — it just has nothing to say, and that path will not exist.
     pub fn file(&self) -> PathBuf {
         match self.kind {
-            Kind::Request => self.dir.join(REQUEST_FILE),
+            Kind::Request => self.dir.clone(),
             Kind::Collection => self.dir.join(COLLECTION_FILE),
+        }
+    }
+
+    /// The directory this entity lives in — itself for a collection, its parent for a
+    /// request.
+    pub fn dir(&self) -> PathBuf {
+        match self.kind {
+            Kind::Request => self
+                .dir
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.dir.clone()),
+            Kind::Collection => self.dir.clone(),
         }
     }
 }
@@ -70,6 +84,47 @@ pub struct Project {
     pub entries: Vec<Entry>,
     /// Indices of the top-level entries, in display order.
     pub roots: Vec<usize>,
+    /// Files that looked like requests but weren't usable — reported, never silently
+    /// skipped.
+    pub notes: Vec<String>,
+}
+
+/// What a `.md` file in a project turned out to be.
+enum Classification {
+    Request,
+    /// No frontmatter at all: someone's notes, and none of our business.
+    Documentation,
+    Unusable(String),
+}
+
+fn classify(path: &Path) -> Classification {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Classification::Unusable("could not be read".into());
+    };
+    if !text.trim_start().starts_with("---") {
+        return Classification::Documentation;
+    }
+    match Document::parse(&text) {
+        Ok((doc, _)) if doc.front.url.is_some() => Classification::Request,
+        Ok(_) => Classification::Unusable(
+            "has frontmatter but no `url:`, so it is not a request — add one, or remove the \
+             frontmatter to keep it as notes"
+                .into(),
+        ),
+        Err(e) => Classification::Unusable(e),
+    }
+}
+
+fn join(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}/{name}")
+    }
+}
+
+fn display_rel(prefix: &str, name: &str) -> String {
+    join(prefix, name)
 }
 
 impl Project {
@@ -111,55 +166,82 @@ impl Project {
             root,
             entries: Vec::new(),
             roots: Vec::new(),
+            notes: Vec::new(),
         };
-        let apis = project.root.join(APIS_DIR);
-        if apis.is_dir() {
-            project.roots = project.scan(&apis, None, "")?;
-        }
+        let root = project.root.clone();
+        project.roots = project.scan(&root, None, "")?;
         Ok(project)
     }
 
     fn scan(&mut self, dir: &Path, parent: Option<usize>, prefix: &str) -> Result<Vec<usize>> {
-        let mut kids: Vec<(String, PathBuf)> = Vec::new();
+        let mut dirs: Vec<(String, PathBuf)> = Vec::new();
+        let mut files: Vec<(String, PathBuf)> = Vec::new();
+
         for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
             let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
             let name = entry.file_name().to_string_lossy().to_string();
-            // `__`-prefixed folders are rq's own (`__examples/`, `__scripts/`), never entities.
-            if rq_doc::layout::is_reserved_dir(&name) {
-                continue;
+            if entry.file_type()?.is_dir() {
+                if !rq_doc::layout::is_reserved_dir(&name) {
+                    dirs.push((name, entry.path()));
+                }
+            } else if rq_doc::layout::is_request_file(&name) {
+                files.push((name, entry.path()));
             }
-            kids.push((name, entry.path()));
         }
-        kids.sort_by(|a, b| a.0.cmp(&b.0));
+        dirs.sort_by(|a, b| a.0.cmp(&b.0));
+        files.sort_by(|a, b| a.0.cmp(&b.0));
 
         let mut out = Vec::new();
-        for (name, path) in kids {
-            let rel = if prefix.is_empty() {
-                name.clone()
-            } else {
-                format!("{prefix}/{name}")
+
+        // Requests first: a directory listing reads better when the things you can run come
+        // before the things you have to open.
+        for (file, path) in files {
+            let Some(name) = rq_doc::layout::request_name(&file).map(str::to_string) else {
+                continue;
             };
-            let kind = if path.join(REQUEST_FILE).is_file() {
-                Kind::Request
-            } else {
-                Kind::Collection
-            };
+            // A markdown file with no frontmatter is documentation — a README next to the
+            // requests it describes, which is the point of keeping them in one directory.
+            match classify(&path) {
+                Classification::Request => {}
+                Classification::Documentation => continue,
+                Classification::Unusable(why) => {
+                    self.notes
+                        .push(format!("{}: {why}", display_rel(prefix, &name)));
+                    continue;
+                }
+            }
+            let rel = join(prefix, &name);
             let idx = self.entries.len();
             self.entries.push(Entry {
-                kind,
+                kind: Kind::Request,
+                dir: path,
+                rel,
+                name,
+                parent,
+                children: Vec::new(),
+                runnable: true,
+            });
+            out.push(idx);
+        }
+
+        for (name, path) in dirs {
+            let rel = join(prefix, &name);
+            let index = path.join(COLLECTION_FILE);
+            // A collection's index may be a request in its own right: the landing page you
+            // get by naming the collection.
+            let runnable = index.is_file() && matches!(classify(&index), Classification::Request);
+            let idx = self.entries.len();
+            self.entries.push(Entry {
+                kind: Kind::Collection,
                 dir: path.clone(),
                 rel: rel.clone(),
                 name,
                 parent,
                 children: Vec::new(),
+                runnable,
             });
-            if kind == Kind::Collection {
-                let children = self.scan(&path, Some(idx), &rel)?;
-                self.entries[idx].children = children;
-            }
+            let children = self.scan(&path, Some(idx), &rel)?;
+            self.entries[idx].children = children;
             out.push(idx);
         }
         Ok(out)
@@ -173,7 +255,7 @@ impl Project {
         if let Some(i) = self
             .entries
             .iter()
-            .position(|e| e.rel == needle && e.kind == Kind::Request)
+            .position(|e| e.rel == needle && e.runnable)
         {
             return Ok(i);
         }
@@ -185,7 +267,7 @@ impl Project {
             if let Some(i) = self
                 .entries
                 .iter()
-                .position(|e| e.kind == Kind::Request && e.dir.canonicalize().ok() == canon)
+                .position(|e| e.runnable && e.dir.canonicalize().ok() == canon)
             {
                 return Ok(i);
             }
@@ -195,7 +277,7 @@ impl Project {
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.kind == Kind::Request && e.name == needle)
+            .filter(|(_, e)| e.runnable && e.name == needle)
             .map(|(i, _)| i)
             .collect();
 
@@ -228,10 +310,12 @@ impl Project {
     fn nearest(&self, needle: &str) -> Option<&str> {
         self.entries
             .iter()
-            .filter(|e| e.kind == Kind::Request)
+            .filter(|e| e.runnable)
             .map(|e| (common_prefix(&e.name, needle), e))
             .filter(|(score, _)| *score >= 2)
-            .max_by_key(|(score, _)| *score)
+            // Best match first; on a tie the least-nested one, which is the likelier
+            // intent and — unlike "whichever we saw last" — the same answer every time.
+            .min_by_key(|(score, e)| (std::cmp::Reverse(*score), e.rel.len()))
             .map(|(_, e)| e.rel.as_str())
     }
 
@@ -252,14 +336,12 @@ impl Project {
         load_document(&path)
     }
 
-    /// The project-wide `apis/__collection.md`, if there is one.
+    /// The project's own `index.md`: what every request in it shares.
     ///
-    /// `apis/` is not an entry in the tree — the scan starts inside it — so a top-level
-    /// request has no ancestor to inherit from. Without this, the one file that says
-    /// "every request in this project sends these headers" was read by the converter and
-    /// ignored by the runner.
+    /// The project root is a collection like any other directory, but it has no entry in
+    /// the tree to hang from — so it is read from here.
     pub fn root_collection(&self) -> Result<Option<(Document, Vec<Note>)>> {
-        let path = self.root.join(APIS_DIR).join(COLLECTION_FILE);
+        let path = self.root.join(COLLECTION_FILE);
         if !path.is_file() {
             return Ok(None);
         }
@@ -275,11 +357,9 @@ impl Project {
         load_document(&path).map(Some)
     }
 
+    /// Everything that can be run, in tree order.
     pub fn requests(&self) -> impl Iterator<Item = (usize, &Entry)> {
-        self.entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.kind == Kind::Request)
+        self.entries.iter().enumerate().filter(|(_, e)| e.runnable)
     }
 
     // --- environments --------------------------------------------------------------------
@@ -303,7 +383,6 @@ impl Project {
             Err(_) => Vec::new(),
         };
         names.sort();
-        names.sort_by_key(|n| n != GLOBAL_ENV);
         names
     }
 
@@ -328,6 +407,29 @@ impl Project {
             );
         }
         load_document(&path)
+    }
+
+    /// The always-on variable layer: `KEY=value` lines from `.env`, `#` comments and an
+    /// optional `export ` allowed. Absent is simply empty — a project with one set of
+    /// values needs nothing else.
+    pub fn dotenv(&self) -> Vec<(String, String)> {
+        let Ok(text) = std::fs::read_to_string(self.root.join(DOTENV)) else {
+            return Vec::new();
+        };
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .filter_map(|line| line.strip_prefix("export ").unwrap_or(line).split_once('='))
+            .map(|(key, value)| {
+                (
+                    key.trim().to_string(),
+                    value
+                        .trim()
+                        .trim_matches(|c| c == '"' || c == '\'')
+                        .to_string(),
+                )
+            })
+            .collect()
     }
 
     fn state_path(&self) -> PathBuf {
@@ -371,21 +473,21 @@ pub fn save_document(path: &Path, doc: &Document) -> Result<()> {
     Ok(())
 }
 
-/// Create a project skeleton. Idempotent: an existing marker is left alone.
+/// Create a project. One file: a project is a directory of markdown, and an `rq init` that
+/// scattered empty directories would be making that harder to see, not easier.
 pub fn init(root: &Path) -> Result<bool> {
     let marker = root.join(MARKER);
     if marker.is_file() {
         return Ok(false);
     }
-    std::fs::create_dir_all(root.join(APIS_DIR))?;
-    std::fs::create_dir_all(root.join(ENVS_DIR))?;
+    std::fs::create_dir_all(root)?;
     std::fs::write(&marker, rq_doc::layout::marker())?;
 
     let gitignore = root.join(".gitignore");
     if !gitignore.exists() {
         std::fs::write(
             &gitignore,
-            "# rq keeps the active environment and other machine-local state here.\n.requestly/\n",
+            "# rq keeps the active environment and other machine-local state here.\n             .rq/\n\n             # Secrets belong to your machine, not to the collection.\n             .env\n",
         )?;
     }
     Ok(true)
@@ -412,7 +514,7 @@ mod tests {
         let root = dir.path().to_path_buf();
         init(&root).unwrap();
         for rel in ["issues", "github/login", "github/issues", "acme/login"] {
-            let path = root.join(APIS_DIR).join(rel).join(REQUEST_FILE);
+            let path = root.join(format!("{rel}.md"));
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, "---\nurl: https://x.test\n---\n").unwrap();
         }
@@ -452,7 +554,7 @@ mod tests {
     #[test]
     fn finds_the_root_by_walking_up() {
         let (_d, p) = fixture();
-        let deep = p.root.join(APIS_DIR).join("github").join("login");
+        let deep = p.root.join("github");
         let found = Project::find(None, &deep).unwrap();
         assert_eq!(
             found.root.canonicalize().unwrap(),

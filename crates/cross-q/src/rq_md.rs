@@ -5,9 +5,9 @@
 //! the Requestly tree like anything else in the category.
 //!
 //! Input is the same virtual filesystem the Bruno importer takes — a JSON map of
-//! `path → contents` — or a single `__metadata.md` document. **The directory is the tree**:
-//! a folder holding `__metadata.md` is a request, every other folder is a collection, and
-//! nothing stores a parent id.
+//! `path → contents` — or a single request document. **The directory is the tree**: every
+//! `*.md` is a request, every directory is a collection, an `index.md` is what its
+//! directory shares, and nothing stores a parent id.
 
 use std::collections::BTreeMap;
 
@@ -23,18 +23,17 @@ use rq_doc::{layout, AuthSpec, Document, StrMap};
 /// Parse an `rq` project (a virtual-FS map) or a single request document.
 pub fn parse_rq_md(content: &str, report: &mut Report) -> Result<Workspace, String> {
     if let Ok(files) = serde_json::from_str::<BTreeMap<String, String>>(content) {
-        if files.keys().any(|k| {
-            k == layout::MARKER
-                || k.ends_with(layout::REQUEST_FILE)
-                || k.ends_with(layout::COLLECTION_FILE)
-        }) {
+        if files
+            .keys()
+            .any(|k| k == layout::MARKER || k.ends_with(".md") || k == layout::DOTENV)
+        {
             return Ok(parse_project(&files, report));
         }
     }
     // A single request document.
     let (doc, notes) = Document::parse(content)?;
-    note_all(&notes, layout::REQUEST_FILE, report);
-    let request = to_request(&doc, "request", layout::REQUEST_FILE, report);
+    note_all(&notes, "request.md", report);
+    let request = to_request(&doc, "request", "request.md", report);
     Ok(workspace(
         Collection {
             meta: meta("rq-root", ""),
@@ -47,16 +46,14 @@ pub fn parse_rq_md(content: &str, report: &mut Report) -> Result<Workspace, Stri
 
 /// Assemble a project directory into a [`Workspace`].
 pub fn parse_project(files: &BTreeMap<String, String>, report: &mut Report) -> Workspace {
-    let apis_prefix = format!("{}/", layout::APIS_DIR);
-
     let mut root = Collection {
         meta: meta("rq-root", ""),
         ..Collection::default()
     };
-    if let Some(content) = files.get(&layout::collection_path("")) {
-        apply_collection(content, &layout::collection_path(""), &mut root, report);
+    if let Some(content) = files.get(layout::COLLECTION_FILE) {
+        apply_collection(content, layout::COLLECTION_FILE, &mut root, report);
     }
-    root.items = build_tree(files, &apis_prefix, "", report);
+    root.items = build_tree(files, "", report);
 
     let mut environments = Vec::new();
     for (path, content) in files {
@@ -74,7 +71,7 @@ pub fn parse_project(files: &BTreeMap<String, String>, report: &mut Report) -> W
                 note_all(&notes, path, report);
                 environments.push(Environment {
                     meta: meta(&format!("rq-env-{name}"), name),
-                    is_global: name == layout::GLOBAL_ENV,
+                    is_global: false,
                     variables: variables(&doc, cq_model::Scope::Environment),
                 });
             }
@@ -86,78 +83,113 @@ pub fn parse_project(files: &BTreeMap<String, String>, report: &mut Report) -> W
             )),
         }
     }
+    // The always-on layer is the global environment, in the model's terms.
+    if let Some(content) = files.get(layout::DOTENV) {
+        environments.push(Environment {
+            meta: meta("rq-env-global", ""),
+            is_global: true,
+            variables: dotenv_variables(content),
+        });
+    }
 
-    // `parents:` are paths; the model links by id. Resolve after the whole tree is known.
     let mut ws = workspace(root, environments);
     link_dependencies(&mut ws, report);
     ws
 }
 
-/// The immediate children of `dir`, in name order. A folder with a `__metadata.md` is a
-/// request; anything else that holds files is a collection.
-fn build_tree(
-    files: &BTreeMap<String, String>,
-    prefix: &str,
-    rel: &str,
-    report: &mut Report,
-) -> Vec<Item> {
-    let here = if rel.is_empty() {
-        prefix.to_string()
+/// `KEY=value` lines, `#` comments, an optional `export ` — the dotenv everyone has.
+fn dotenv_variables(content: &str) -> Vec<Variable> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.strip_prefix("export ").unwrap_or(line).split_once('='))
+        .map(|(key, value)| Variable {
+            key: key.trim().to_string(),
+            value: value
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .to_string(),
+            initial: None,
+            scope: cq_model::Scope::Global,
+            data_type: VarType::String,
+            category: VarCategory::Scoped,
+            enabled: true,
+            rank: None,
+        })
+        .collect()
+}
+
+/// The children of `rel`: every `*.md` is a request, every directory a collection.
+fn build_tree(files: &BTreeMap<String, String>, rel: &str, report: &mut Report) -> Vec<Item> {
+    let prefix = if rel.is_empty() {
+        String::new()
     } else {
-        format!("{prefix}{rel}/")
+        format!("{rel}/")
     };
 
-    let mut names: Vec<String> = Vec::new();
-    for path in files.keys() {
-        let Some(tail) = path.strip_prefix(&here) else {
+    let mut requests: Vec<(String, &String)> = Vec::new();
+    let mut dirs: Vec<String> = Vec::new();
+    for (path, content) in files {
+        let Some(tail) = path.strip_prefix(&prefix) else {
             continue;
         };
-        let Some((name, _)) = tail.split_once('/') else {
-            continue;
-        };
-        if layout::is_reserved_dir(name) || names.iter().any(|n| n == name) {
-            continue;
+        match tail.split_once('/') {
+            Some((dir, _)) => {
+                if !layout::is_reserved_dir(dir) && !dirs.iter().any(|d| d == dir) {
+                    dirs.push(dir.to_string());
+                }
+            }
+            None => {
+                if layout::is_request_file(tail) {
+                    if let Some(name) = layout::request_name(tail) {
+                        requests.push((name.to_string(), content));
+                    }
+                }
+            }
         }
-        names.push(name.to_string());
     }
-    names.sort();
+    requests.sort_by(|a, b| a.0.cmp(&b.0));
+    dirs.sort();
 
     let mut items = Vec::new();
-    for name in names {
+    for (name, content) in requests {
         let child_rel = if rel.is_empty() {
             name.clone()
         } else {
             format!("{rel}/{name}")
         };
-        let request_at = format!("{prefix}{child_rel}/{}", layout::REQUEST_FILE);
-
-        if let Some(content) = files.get(&request_at) {
-            match Document::parse(content) {
-                Ok((doc, notes)) => {
-                    note_all(&notes, &request_at, report);
-                    items.push(Item::Request(Box::new(to_request(
-                        &doc, &name, &child_rel, report,
-                    ))));
-                }
-                Err(e) => report.push(cq_report::Diagnostic::new(
-                    Severity::Error,
-                    Phase::Parse,
-                    provenance(&request_at),
-                    format!("{request_at}: {e}"),
-                )),
+        let at = layout::request_path(&child_rel);
+        match Document::parse(content) {
+            Ok((doc, notes)) => {
+                note_all(&notes, &at, report);
+                items.push(Item::Request(Box::new(to_request(
+                    &doc, &name, &child_rel, report,
+                ))));
             }
-            continue;
+            Err(e) => report.push(cq_report::Diagnostic::new(
+                Severity::Error,
+                Phase::Parse,
+                provenance(&at),
+                format!("{at}: {e}"),
+            )),
         }
-
+    }
+    for name in dirs {
+        let child_rel = if rel.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel}/{name}")
+        };
         let mut collection = Collection {
             meta: meta(&format!("rq-{child_rel}"), &name),
             ..Collection::default()
         };
-        let doc_at = format!("{prefix}{child_rel}/{}", layout::COLLECTION_FILE);
+        let doc_at = layout::collection_path(&child_rel);
         if let Some(content) = files.get(&doc_at) {
             apply_collection(content, &doc_at, &mut collection, report);
         }
-        collection.items = build_tree(files, prefix, &child_rel, report);
+        collection.items = build_tree(files, &child_rel, report);
         items.push(Item::Collection(Box::new(collection)));
     }
     items

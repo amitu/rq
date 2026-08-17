@@ -7,7 +7,7 @@ use crate::cookies::Jar;
 use crate::doc::{AuthSpec, Document, VarSpec};
 use crate::graph;
 use crate::http::{self, Payload, Prepared, Response};
-use crate::project::{Project, REQUEST_FILE};
+use crate::project::Project;
 use crate::render;
 use crate::script::{
     self, LogEntry, RequestHeaderMutation, ScriptEngine, ScriptExecutionResult, ScriptPhase,
@@ -134,24 +134,17 @@ pub fn run(
         notes.extend(doc_notes.into_iter().map(|n| format!("{name}.md: {n}")));
         env_declared = doc.front.vars.clone();
     }
-    let mut global_declared: Vec<(String, VarSpec)> = Vec::new();
-    if project.env_path(crate::project::GLOBAL_ENV).is_file()
-        && env_name.as_deref() != Some(crate::project::GLOBAL_ENV)
-    {
-        let (doc, doc_notes) = project.load_env(crate::project::GLOBAL_ENV)?;
-        notes.extend(doc_notes.into_iter().map(|n| format!("__global.md: {n}")));
-        global_declared = doc.front.vars.clone();
-    }
     // An environment's variables are values, not prompts: take their declared defaults
     // directly rather than asking for them.
-    for (k, spec) in env_declared.iter().chain(global_declared.iter()) {
-        if let Some(v) = env_value(spec) {
-            env_layer.push((k.clone(), v));
+    for (key, spec) in env_declared.iter() {
+        if let Some(value) = env_value(spec) {
+            env_layer.push((key.clone(), value));
         }
     }
+    // The always-on layer: `.env`, the file every project already has one of.
+    let dotenv = project.dotenv();
     let env_secrets: Vec<String> = env_declared
         .iter()
-        .chain(global_declared.iter())
         .filter(|(_, s)| s.secret)
         .map(|(k, _)| k.clone())
         .collect();
@@ -178,6 +171,7 @@ pub fn run(
             env_name.as_deref().unwrap_or("environment"),
             env_layer.clone(),
         );
+        v.layer(".env", dotenv.clone());
         for key in &env_secrets {
             v.mark_secret(key);
         }
@@ -1075,11 +1069,7 @@ pub fn scaffold(url: &str, method: &str) -> Document {
 }
 
 pub fn request_path(project: &Project, rel: &str) -> std::path::PathBuf {
-    project
-        .root
-        .join(crate::project::APIS_DIR)
-        .join(rel)
-        .join(REQUEST_FILE)
+    project.root.join(rq_doc::layout::request_path(rel))
 }
 
 /// Standard base64. Twenty lines beats a dependency for one Authorization header.

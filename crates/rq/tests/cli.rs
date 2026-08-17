@@ -32,14 +32,14 @@ impl Fixture {
     }
 
     fn write(&self, rel: &str, contents: &str) -> PathBuf {
-        let path = self.root().join("apis").join(rel).join("__metadata.md");
+        let path = self.root().join(format!("{rel}.md"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, contents).unwrap();
         path
     }
 
     fn write_env(&self, name: &str, contents: &str) {
-        let path = self.root().join("environments").join(format!("{name}.md"));
+        let path = self.root().join("env").join(format!("{name}.md"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, contents).unwrap();
     }
@@ -338,7 +338,7 @@ fn curl_round_trips_into_a_runnable_request() {
         stderr(&saved)
     );
 
-    let file = std::fs::read_to_string(f.root().join("apis/github/create/__metadata.md")).unwrap();
+    let file = std::fs::read_to_string(f.root().join("github/create.md")).unwrap();
     assert!(file.contains("method: POST"), "{file}");
     assert!(file.contains("X-Trace: abc"), "{file}");
     assert!(file.contains("{\"a\": 1}"), "{file}");
@@ -357,9 +357,9 @@ fn a_collection_shares_headers_and_auth_with_its_requests() {
     let f = Fixture::new();
     std::fs::write(
         {
-            let p = f.root().join("apis/acme");
+            let p = f.root().join("acme");
             std::fs::create_dir_all(&p).unwrap();
-            p.join("__collection.md")
+            p.join("index.md")
         },
         "---\nheaders:\n  X-Team: platform\nauth: { type: bearer, token: shared }\n---\n",
     )

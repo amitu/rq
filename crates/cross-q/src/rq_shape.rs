@@ -56,7 +56,10 @@ fn postman_cookie_to_cookie(pm: &Value, request_url: &str) -> Option<Value> {
     // A nameless cookie is meaningless to us — drop it (mirrors the app). An empty *value* is
     // legal; only the name gates the drop. `??`-style nullish defaults: a present-but-empty
     // domain/path is kept; an absent one falls back (RFC 6265 §5.2).
-    let name = pm.get("name").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+    let name = pm
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?;
     let value = pm.get("value").and_then(Value::as_str).unwrap_or("");
     let domain = pm
         .get("domain")
@@ -100,7 +103,9 @@ fn postman_cookie_to_cookie(pm: &Value, request_url: &str) -> Option<Value> {
 fn cookie_expiry(expires: Option<&Value>) -> Value {
     match expires {
         Some(Value::Number(n)) => match n.as_f64() {
-            Some(f) if f.is_finite() => json!({ "type": "absolute", "date": epoch_ms_to_iso((f * 1000.0) as i64) }),
+            Some(f) if f.is_finite() => {
+                json!({ "type": "absolute", "date": epoch_ms_to_iso((f * 1000.0) as i64) })
+            }
             _ => json!({ "type": "session" }),
         },
         Some(Value::String(s)) => {
@@ -132,7 +137,10 @@ pub fn dedupe_cookies(cookies: Vec<Value>) -> Vec<Value> {
         }
         by_key.insert(key, c);
     }
-    order.into_iter().filter_map(|k| by_key.remove(&k)).collect()
+    order
+        .into_iter()
+        .filter_map(|k| by_key.remove(&k))
+        .collect()
 }
 
 /// The request URL's host — `new URL(url).hostname`, with the app's fallback: an unparseable
@@ -203,12 +211,18 @@ fn canonical_iso(s: &str) -> Option<String> {
     // Milliseconds: first up to 3 fractional digits after '.', if present.
     let mut ms = 0u32;
     if bytes.get(19) == Some(&b'.') {
-        let frac: String = s[20..].chars().take_while(|c| c.is_ascii_digit()).take(3).collect();
+        let frac: String = s[20..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .take(3)
+            .collect();
         if !frac.is_empty() {
             ms = format!("{frac:0<3}").parse().unwrap_or(0);
         }
     }
-    Some(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}.{ms:03}Z"))
+    Some(format!(
+        "{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{se:02}.{ms:03}Z"
+    ))
 }
 
 /// Epoch milliseconds → `YYYY-MM-DDTHH:MM:SS.sssZ` (UTC), byte-identical to JS
@@ -216,7 +230,12 @@ fn canonical_iso(s: &str) -> Option<String> {
 fn epoch_ms_to_iso(ms: i64) -> String {
     let days = ms.div_euclid(86_400_000);
     let rem = ms.rem_euclid(86_400_000);
-    let (h, mi, se, msec) = (rem / 3_600_000, (rem % 3_600_000) / 60_000, (rem % 60_000) / 1000, rem % 1000);
+    let (h, mi, se, msec) = (
+        rem / 3_600_000,
+        (rem % 3_600_000) / 60_000,
+        (rem % 60_000) / 1000,
+        rem % 1000,
+    );
     // civil_from_days
     let z = days + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;

@@ -55,12 +55,12 @@ fn a_curl_becomes_one_readable_document() {
         "curl -X POST https://api.test/login -H 'Content-Type: application/json' \
          -d '{\"user\":\"amitu\"}'",
     );
-    assert!(map.contains_key("__requestly.json"));
+    assert!(map.contains_key("rq.toml"));
     let (path, doc) = map
         .iter()
-        .find(|(k, _)| k.ends_with("__metadata.md"))
+        .find(|(k, _)| k.ends_with(".md") && !k.ends_with("index.md"))
         .expect("a request document");
-    assert!(path.starts_with("apis/"), "{path}");
+    assert!(path.ends_with(".md"), "{path}");
     assert!(doc.contains("method: POST"), "{doc}");
     assert!(doc.contains("url: https://api.test/login"), "{doc}");
     assert!(doc.contains("Content-Type: application/json"), "{doc}");
@@ -94,7 +94,7 @@ fn a_postman_collection_becomes_a_tree_and_keeps_its_scripts_verbatim() {
 
     let (map, report) = to_project("postman", &collection);
     let doc = map
-        .get("apis/Acme/Auth/login/__metadata.md")
+        .get("Acme/Auth/login.md")
         .expect("the request at its tree path");
     assert!(doc.contains("type: basic"), "{doc}");
     assert!(doc.contains("-- post --"), "{doc}");
@@ -128,7 +128,7 @@ fn an_unsendable_auth_is_preserved_and_reported_not_stripped() {
     .to_string();
 
     let (map, report) = to_project("postman", &collection);
-    let doc = map.get("apis/A/hawked/__metadata.md").unwrap();
+    let doc = map.get("A/hawked.md").unwrap();
     assert!(doc.contains("hawk"), "{doc}");
     assert!(doc.contains("s3cret"), "the credential must survive: {doc}");
     assert!(report
@@ -148,19 +148,19 @@ fn an_unsendable_auth_is_preserved_and_reported_not_stripped() {
 /// inheritance, each body shape, auth, variables, environments, and declared chaining.
 fn fixture() -> BTreeMap<String, String> {
     BTreeMap::from([
-        ("__requestly.json".into(), rq_doc::layout::marker()),
+        ("rq.toml".into(), rq_doc::layout::marker()),
         (
-            "apis/__collection.md".into(),
+            "index.md".into(),
             "---\nheaders:\n  X-Root: yes\n---\n".into(),
         ),
         (
-            "apis/acme/__collection.md".into(),
+            "acme/index.md".into(),
             "---\nheaders:\n  X-Team: platform\nauth: { type: bearer, token: shared }\n\
              vars:\n  host: https://api.test\n---\n\n-- description --\n\nThe Acme API.\n"
                 .into(),
         ),
         (
-            "apis/acme/login/__metadata.md".into(),
+            "acme/login.md".into(),
             "---\nmethod: POST\nurl: '{{host}}/auth/login'\n\
              headers:\n  Content-Type: application/json\n\
              capture:\n  token: response.access_token\n---\n\n\
@@ -168,20 +168,20 @@ fn fixture() -> BTreeMap<String, String> {
                 .into(),
         ),
         (
-            "apis/acme/me/__metadata.md".into(),
+            "acme/me.md".into(),
             "---\nurl: '{{host}}/me'\nheaders:\n  Authorization: Bearer {{token}}\n\
              query:\n  expand: plan\nparents: [login]\n---\n\n\
              -- view --\n\n# {{ response.name }}\n\n-- post --\n\nrq.test('ok', () => true);\n"
                 .into(),
         ),
         (
-            "apis/upload/__metadata.md".into(),
+            "upload.md".into(),
             "---\nmethod: POST\nurl: https://api.test/upload\n\
              form_data:\n  caption: hello\n  photo: '@./cat.png'\n---\n"
                 .into(),
         ),
         (
-            "apis/search/__metadata.md".into(),
+            "search.md".into(),
             "---\nmethod: POST\nurl: https://api.test/search\n\
              form:\n  q: rust\n  page: '2'\npath_vars:\n  id: '7'\n\
              timeout: 5000\nfollow_redirects: false\nverify_tls: false\n\
@@ -189,11 +189,11 @@ fn fixture() -> BTreeMap<String, String> {
                 .into(),
         ),
         (
-            "environments/__global.md".into(),
-            "---\nvars:\n  host: https://api.test\n---\n".into(),
+            ".env".into(),
+            "host=https://api.test\n".into(),
         ),
         (
-            "environments/staging.md".into(),
+            "env/staging.md".into(),
             "---\nvars:\n  host: https://staging.api.test\n  TOKEN: { default: t, secret: true }\n---\n"
                 .into(),
         ),

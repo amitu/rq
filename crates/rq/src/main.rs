@@ -663,15 +663,14 @@ fn import(cli: &Cli, cwd: &Path, args: &ImportArgs) -> Result<i32> {
     // importer as a virtual-FS map, exactly as it does through `cq`.
     let (content, detected) = if args.file.is_dir() {
         let map = import::read_dir_map(&args.file)?;
-        let detected = if map.contains_key(project::MARKER)
-            || map.keys().any(|k| k.ends_with(project::REQUEST_FILE))
-        {
-            Some("rq")
-        } else if map.keys().any(|k| k.ends_with(".bru") || k == "bruno.json") {
-            Some("bruno")
-        } else {
-            None
-        };
+        let detected =
+            if map.contains_key(project::MARKER) || map.keys().any(|k| k.ends_with(".md")) {
+                Some("rq")
+            } else if map.keys().any(|k| k.ends_with(".bru") || k == "bruno.json") {
+                Some("bruno")
+            } else {
+                None
+            };
         (serde_json::to_string(&map)?, detected)
     } else {
         let text = std::fs::read_to_string(&args.file)
@@ -698,7 +697,7 @@ fn import(cli: &Cli, cwd: &Path, args: &ImportArgs) -> Result<i32> {
     let written = import::write_project(&map, &project.root)?;
     let environments = map
         .keys()
-        .filter(|k| k.starts_with(&format!("{}/", project::ENVS_DIR)))
+        .filter(|k| k.starts_with(&format!("{}/", project::ENVS_DIR)) || *k == project::DOTENV)
         .count();
 
     if created {

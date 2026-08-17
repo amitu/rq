@@ -110,23 +110,19 @@ fn resolve_input(input: &str, from: Option<&str>) -> anyhow::Result<Resolved> {
         // into the virtual-FS map the importers consume (the native side of the
         // no-filesystem-in-WASM boundary).
         let map = read_dir_map(p)?;
-        let detected = if map.contains_key(rq_doc::layout::MARKER)
-            || map
-                .keys()
-                .any(|k| k.ends_with(rq_doc::layout::REQUEST_FILE))
-        {
-            "rq"
-        } else if map.keys().any(|k| k.ends_with(".bru") || k == "bruno.json") {
-            "bruno"
-        } else {
-            anyhow::bail!(
-                "directory {} is neither an rq project ({} / {}) nor a Bruno collection \
+        let detected =
+            if map.contains_key(rq_doc::layout::MARKER) || map.keys().any(|k| k.ends_with(".md")) {
+                "rq"
+            } else if map.keys().any(|k| k.ends_with(".bru") || k == "bruno.json") {
+                "bruno"
+            } else {
+                anyhow::bail!(
+                    "directory {} is neither an rq project ({}) nor a Bruno collection \
                  (.bru / bruno.json)",
-                p.display(),
-                rq_doc::layout::MARKER,
-                rq_doc::layout::REQUEST_FILE
-            )
-        };
+                    p.display(),
+                    rq_doc::layout::MARKER
+                )
+            };
         return Ok(Resolved {
             origin: format!("directory {}", p.display()),
             payload: serde_json::to_string(&map)?,

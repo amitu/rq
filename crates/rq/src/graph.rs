@@ -101,15 +101,15 @@ mod tests {
     use std::path::Path;
 
     fn write(root: &Path, rel: &str, parents: &[&str]) {
-        let dir = root.join(project::APIS_DIR).join(rel);
-        std::fs::create_dir_all(&dir).unwrap();
+        let path = root.join(format!("{rel}.md"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let list = parents
             .iter()
             .map(|p| format!("\"{p}\""))
             .collect::<Vec<_>>()
             .join(", ");
         std::fs::write(
-            dir.join(project::REQUEST_FILE),
+            &path,
             format!("---\nurl: https://x.test/{rel}\nparents: [{list}]\n---\n"),
         )
         .unwrap();

@@ -328,11 +328,17 @@ fn request_item(req: &Request, parent_temp: Option<&str>, report: &mut Report) -
             Phase::Emit,
             req.meta.source.clone(),
             "unsupported_http_method",
-            format!("HTTP method '{src_method}' on '{}' coerced to GET", req.meta.name),
+            format!(
+                "HTTP method '{src_method}' on '{}' coerced to GET",
+                req.meta.name
+            ),
         );
     }
     if let Some(cq_model::Body::FormData { fields }) = &http.body {
-        if fields.iter().any(|f| matches!(f, cq_model::FormField::File(_))) {
+        if fields
+            .iter()
+            .any(|f| matches!(f, cq_model::FormField::File(_)))
+        {
             report.warn(
                 Severity::Coerced,
                 Phase::Emit,
