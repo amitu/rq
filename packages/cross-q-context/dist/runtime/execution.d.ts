@@ -1,5 +1,5 @@
 import type { ExecutionMetadata, FeatureFlags, Json, RuntimeComponent, SandboxExecutionEvent, SandboxHostCallbacks, ScriptPhase, ScriptExecutionMode, StreamReader } from './contract.js';
-import type { EnvironmentVariables, GraphQLResponse, GrpcScriptResponse, HttpResponse, ParsedGraphQLRequest, ParsedGrpcRequest, ParsedHttpRequest, ScriptMessageInput } from './model.js';
+import type { EntryType, EnvironmentVariables, GraphQLResponse, GrpcScriptResponse, HttpResponse, ParsedGraphQLRequest, ParsedGrpcRequest, ParsedHttpRequest, ScriptMessageInput } from './model.js';
 /** Read-side cookie seed for `rq.cookies.jar(host)` (ADR-105): pre-fetched cookies per allowed host. */
 export interface CookieJarSeed {
     host: string;
@@ -39,6 +39,16 @@ export interface ScriptExecutionInput {
     mode: ScriptExecutionMode;
     context: ScriptExecutionContext;
     timeoutMs?: number;
+    /** Source scriptChain entry id — derives the package-resolution context. */
+    entryId?: string;
+    /** Entry type for protocol-specific script API dispatch (ADR-136). */
+    entryType?: EntryType;
+    /** User npm packages available to require() (name → version). */
+    userPackages?: Record<string, string>;
+    /** Packages denied to require(). */
+    blacklistedPackages?: string[];
+    /** On-message batch (realtime phase): the messages to iterate. */
+    messageBatch?: readonly ScriptMessageInput[];
 }
 /** The engine contract: execute a script, stream events, terminate with a result. */
 export interface Sandbox extends RuntimeComponent {

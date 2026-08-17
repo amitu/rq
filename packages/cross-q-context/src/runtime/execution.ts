@@ -14,6 +14,7 @@ import type {
   StreamReader,
 } from './contract.js';
 import type {
+  EntryType,
   EnvironmentVariables,
   GraphQLResponse,
   GrpcScriptResponse,
@@ -65,6 +66,17 @@ export interface ScriptExecutionInput {
   mode: ScriptExecutionMode;
   context: ScriptExecutionContext;
   timeoutMs?: number;
+  // App-drop-in fields (optional so the lean executeScript path stays valid; the app supplies them).
+  /** Source scriptChain entry id — derives the package-resolution context. */
+  entryId?: string;
+  /** Entry type for protocol-specific script API dispatch (ADR-136). */
+  entryType?: EntryType;
+  /** User npm packages available to require() (name → version). */
+  userPackages?: Record<string, string>;
+  /** Packages denied to require(). */
+  blacklistedPackages?: string[];
+  /** On-message batch (realtime phase): the messages to iterate. */
+  messageBatch?: readonly ScriptMessageInput[];
 }
 
 /** The engine contract: execute a script, stream events, terminate with a result. */

@@ -112,8 +112,18 @@ export interface StreamReader<T> {
   cancel?(): Promise<void>;
 }
 
-/** Live events emitted during execution: logs stream as they happen, the result is terminal. */
-export type SandboxExecutionEvent = { type: 'log'; log: LogEntry } | { type: 'result'; result: ScriptExecutionResult };
+/** A touch of a deprecated Postman global (`globals`, `tv4`, …), streamed as it happens. */
+export interface DeprecationSignal {
+  identifier: string;
+  /** Did a shim let the call execute (true), or did the access fail/no-op (false)? */
+  shimmed: boolean;
+}
+
+/** Live events emitted during execution: logs + deprecations stream as they happen, result terminal. */
+export type SandboxExecutionEvent =
+  | { type: 'log'; log: LogEntry }
+  | { type: 'deprecation'; signal: DeprecationSignal }
+  | { type: 'result'; result: ScriptExecutionResult };
 
 /**
  * Live per-execution host callbacks (NOT serialized — marshaled across the host boundary). The

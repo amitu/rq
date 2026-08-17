@@ -48,4 +48,4 @@ export { createInMemoryCookieJarBridge } from './cookies.js';
 export type { CookieJarBridgeHandle } from './cookies.js';
 export { ON_MESSAGE_TIMEOUT_ERROR, stampMessageIndex, createBatchOutcome, buildBatchResult, } from './on-message-batch.js';
 export type { BatchOutcome } from './on-message-batch.js';
-export type { MutationVariables, CollectionMutation, MutationDiff, TestResult, TestResultStatus, ScriptCookieSnapshot, ScriptCookie, CookieJarBridge, CookieJarSeed, CookieJarMutation, ScriptMessageError, ScriptExecutionResult, } from './host-types.js';
+export type { MutationVariables, CollectionMutation, MutationDiff, TestResult, TestResultStatus, ScriptCookieSnapshot, ScriptCookie, CookieJarBridge, CookieJarSeed, CookieJarMutation, ScriptMessageError, ScriptExecutionResult, SandboxExecutionEvent, Sandbox, } from './host-types.js';
