@@ -8,7 +8,15 @@
 // quickjs-emscripten-core is a TYPE-only import here (erased at build); the actual WASM variant is
 // pulled in by the host layer, so consumers of these primitives take on no WASM weight.
 
-// The execute entry — run a (transformed) rq.* script safely in QuickJS and get its result.
+// The full streaming engine — the faithful QuickJsEngine (drop-in for the app's Sandbox) + the
+// Node host wiring. execute() returns a StreamReader<SandboxExecutionEvent> (logs/deprecations
+// stream live, result terminal); supports the require chain, source-bundler, fetch, timers,
+// cookies, and on-message batching.
+export { QuickJsEngine } from './engine.js';
+export type { QuickJsHostConfig } from './engine.js';
+export { QuickJsSandbox, NODE_QUICKJS_HOST } from './quickjs-sandbox.js';
+
+// The lean convenience entry — run a script and get the result as a Promise (no streaming).
 export { executeScript } from './execute.js';
 export type { ExecuteScriptInput } from './execute.js';
 export { createFetchBridge } from './fetch-bridge.js';
