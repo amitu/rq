@@ -87,6 +87,8 @@ export {
   type NodeBuiltinPackageId,
   type SafeModeClass,
   type ScriptPackageUnsupportedReason,
+  type DeveloperAsyncTreatment,
+  type AsyncGlobalName,
 } from './builtInPackages/index.js';
 
 export {

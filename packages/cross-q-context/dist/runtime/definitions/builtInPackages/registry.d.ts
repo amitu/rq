@@ -107,6 +107,7 @@ export declare const NODE_BUILTIN_PACKAGES: readonly [{
     readonly name: "events";
     readonly description: "Event emitter";
     readonly safeModeClass: "source_bundle";
+    readonly developerAsync: "not-an-async-source";
     readonly globalName: "__events";
     readonly polyfillEntry: "events/";
 }, {
@@ -114,60 +115,72 @@ export declare const NODE_BUILTIN_PACKAGES: readonly [{
     readonly name: "stream";
     readonly description: "Stream primitives";
     readonly safeModeClass: "needs_bridge";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "timers";
     readonly name: "timers";
     readonly description: "Timer functions (setTimeout, setInterval)";
     readonly safeModeClass: "needs_bridge";
+    readonly developerAsync: "registry-timers";
 }, {
     readonly id: "util";
     readonly name: "util";
     readonly description: "Utility functions (inspect, format, promisify)";
     readonly safeModeClass: "needs_bridge";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "assert";
     readonly name: "assert";
     readonly description: "Assertion testing";
     readonly safeModeClass: "source_bundle";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "buffer";
     readonly name: "buffer";
     readonly description: "Binary data manipulation (Buffer)";
     readonly safeModeClass: "needs_bridge";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "crypto";
     readonly name: "crypto";
     readonly description: "Hashing, HMAC, encryption, random bytes";
     readonly safeModeClass: "needs_bridge";
+    readonly developerAsync: "callback-last";
 }, {
     readonly id: "path";
     readonly name: "path";
     readonly description: "File path string manipulation";
     readonly safeModeClass: "source_bundle";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "punycode";
     readonly name: "punycode";
     readonly description: "Unicode to ASCII encoding";
     readonly safeModeClass: "source_bundle";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "querystring";
     readonly name: "querystring";
     readonly description: "URL query string parsing";
     readonly safeModeClass: "source_bundle";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "string_decoder";
     readonly name: "string_decoder";
     readonly description: "Buffer to string decoding";
     readonly safeModeClass: "source_bundle";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "url";
     readonly name: "url";
     readonly description: "URL parsing and formatting";
     readonly safeModeClass: "source_bundle";
+    readonly developerAsync: "not-an-async-source";
 }, {
     readonly id: "zlib";
     readonly name: "zlib";
     readonly description: "Compression and decompression (gzip, deflate)";
     readonly safeModeClass: "needs_bridge";
+    readonly developerAsync: "callback-last";
 }];
 export type NodeBuiltinPackageId = (typeof NODE_BUILTIN_PACKAGES)[number]['id'];

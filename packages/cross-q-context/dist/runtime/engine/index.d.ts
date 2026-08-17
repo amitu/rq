@@ -1,6 +1,10 @@
 export { QuickJsEngine } from './engine.js';
 export type { QuickJsHostConfig } from './engine.js';
 export { QuickJsSandbox, NODE_QUICKJS_HOST } from './quickjs-sandbox.js';
+export { NodeSandbox } from './developer/node-sandbox.js';
+export { DispatchingSandbox } from './developer/dispatching-sandbox.js';
+export { buildRq, createExecutionState } from './developer/builder.js';
+export { registerDynamicVariables } from './developer/dynamic-variables.js';
 export { executeScript } from './execute.js';
 export type { ExecuteScriptInput } from './execute.js';
 export { createFetchBridge } from './fetch-bridge.js';

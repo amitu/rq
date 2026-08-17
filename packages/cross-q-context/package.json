@@ -50,7 +50,7 @@
   "scripts": {
     "build:wasm": "wasm-pack build ../../crates/cq-transform --target bundler --out-dir ../../packages/cross-q-context/engine --out-name cross_q_context && wasm-pack build ../../crates/cq-transform --target nodejs --out-dir ../../packages/cross-q-context/engine-node --out-name cross_q_context",
     "build:runtime": "tsc",
-    "test": "node test/smoke.mjs && node test/executor-smoke.mjs && node test/execute-e2e.mjs && node test/engine-streaming.mjs"
+    "test": "node test/smoke.mjs && node test/executor-smoke.mjs && node test/execute-e2e.mjs && node test/engine-streaming.mjs && node test/developer-engine.mjs"
   },
   "dependencies": {
     "@jitl/quickjs-singlefile-browser-release-asyncify": "^0.32.0",

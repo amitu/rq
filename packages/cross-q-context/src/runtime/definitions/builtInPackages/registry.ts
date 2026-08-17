@@ -131,47 +131,99 @@ export const NODE_BUILTIN_PACKAGES = [
     name: 'events',
     description: 'Event emitter',
     safeModeClass: 'source_bundle',
+    developerAsync: 'not-an-async-source',
     globalName: '__events',
     polyfillEntry: 'events/',
   },
-  { id: 'stream', name: 'stream', description: 'Stream primitives', safeModeClass: 'needs_bridge' },
+  {
+    id: 'stream',
+    name: 'stream',
+    description: 'Stream primitives',
+    safeModeClass: 'needs_bridge',
+    // No fs/net/http is reachable, so a stream has nothing to pump it but the
+    // script's own code — already covered. Deliberately NOT callback-last: a
+    // blanket wrap would treat `.on('data', fn)` as a pending operation that
+    // never completes and strand the run until the deadline.
+    developerAsync: 'not-an-async-source',
+  },
   {
     id: 'timers',
     name: 'timers',
     description: 'Timer functions (setTimeout, setInterval)',
     safeModeClass: 'needs_bridge',
+    developerAsync: 'registry-timers',
   },
   {
     id: 'util',
     name: 'util',
     description: 'Utility functions (inspect, format, promisify)',
     safeModeClass: 'needs_bridge',
+    developerAsync: 'not-an-async-source',
   },
 
   // User-facing modules
-  { id: 'assert', name: 'assert', description: 'Assertion testing', safeModeClass: 'source_bundle' },
-  { id: 'buffer', name: 'buffer', description: 'Binary data manipulation (Buffer)', safeModeClass: 'needs_bridge' },
+  {
+    id: 'assert',
+    name: 'assert',
+    description: 'Assertion testing',
+    safeModeClass: 'source_bundle',
+    developerAsync: 'not-an-async-source',
+  },
+  {
+    id: 'buffer',
+    name: 'buffer',
+    description: 'Binary data manipulation (Buffer)',
+    safeModeClass: 'needs_bridge',
+    developerAsync: 'not-an-async-source',
+  },
   {
     id: 'crypto',
     name: 'crypto',
     description: 'Hashing, HMAC, encryption, random bytes',
     safeModeClass: 'needs_bridge',
+    developerAsync: 'callback-last',
   },
-  { id: 'path', name: 'path', description: 'File path string manipulation', safeModeClass: 'source_bundle' },
-  { id: 'punycode', name: 'punycode', description: 'Unicode to ASCII encoding', safeModeClass: 'source_bundle' },
-  { id: 'querystring', name: 'querystring', description: 'URL query string parsing', safeModeClass: 'source_bundle' },
+  {
+    id: 'path',
+    name: 'path',
+    description: 'File path string manipulation',
+    safeModeClass: 'source_bundle',
+    developerAsync: 'not-an-async-source',
+  },
+  {
+    id: 'punycode',
+    name: 'punycode',
+    description: 'Unicode to ASCII encoding',
+    safeModeClass: 'source_bundle',
+    developerAsync: 'not-an-async-source',
+  },
+  {
+    id: 'querystring',
+    name: 'querystring',
+    description: 'URL query string parsing',
+    safeModeClass: 'source_bundle',
+    developerAsync: 'not-an-async-source',
+  },
   {
     id: 'string_decoder',
     name: 'string_decoder',
     description: 'Buffer to string decoding',
     safeModeClass: 'source_bundle',
+    developerAsync: 'not-an-async-source',
   },
-  { id: 'url', name: 'url', description: 'URL parsing and formatting', safeModeClass: 'source_bundle' },
+  {
+    id: 'url',
+    name: 'url',
+    description: 'URL parsing and formatting',
+    safeModeClass: 'source_bundle',
+    developerAsync: 'not-an-async-source',
+  },
   {
     id: 'zlib',
     name: 'zlib',
     description: 'Compression and decompression (gzip, deflate)',
     safeModeClass: 'needs_bridge',
+    developerAsync: 'callback-last',
   },
 ] as const satisfies readonly NodeBuiltinPackage[];
 
