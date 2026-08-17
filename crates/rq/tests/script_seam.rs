@@ -431,3 +431,230 @@ fn the_shipped_build_reports_that_the_script_never_ran() {
     );
     assert_eq!(outcome.total_tests(), 0);
 }
+
+// --- the chain: collection scripts wrap their requests ------------------------------------
+
+impl Fixture {
+    fn write_collection(&self, rel: &str, contents: &str) {
+        let path = self
+            .dir
+            .path()
+            .join(project::APIS_DIR)
+            .join(rel)
+            .join(project::COLLECTION_FILE);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, contents).unwrap();
+    }
+}
+
+/// ADR-061's sandwich: pre-request runs root → request, post-response runs request → root.
+/// Getting this backwards would make a collection imported from the app behave differently
+/// in the CLI, which is the drift this whole project exists to prevent.
+#[test]
+fn collection_scripts_wrap_the_request_in_both_directions() {
+    let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new();
+    f.write_collection(
+        "acme",
+        "---\n---\n\n-- pre --\n\nouterPre();\n\n-- post --\n\nouterPost();\n",
+    );
+    f.write_collection(
+        "acme/v2",
+        "---\n---\n\n-- pre --\n\ninnerPre();\n\n-- post --\n\ninnerPost();\n",
+    );
+    f.write(
+        "acme/v2/ping",
+        &format!(
+            "---\nurl: {}/ping\n---\n\n-- pre --\n\nownPre();\n\n-- post --\n\nownPost();\n",
+            stub.base
+        ),
+    );
+
+    let engine = FakeEngine::new(|_| ScriptExecutionResult::default());
+    f.run("acme/v2/ping", &engine);
+
+    let order: Vec<String> = engine
+        .calls()
+        .iter()
+        .map(|c| format!("{:?}:{}", c.phase, c.script.trim()))
+        .collect();
+    assert_eq!(
+        order,
+        vec![
+            "PreRequest:outerPre();",
+            "PreRequest:innerPre();",
+            "PreRequest:ownPre();",
+            "PostResponse:ownPost();",
+            "PostResponse:innerPost();",
+            "PostResponse:outerPost();",
+        ]
+    );
+}
+
+/// ADR-020: the request is re-prepared after every script, so a variable a collection's
+/// pre-request script sets is substituted into the request that follows it.
+#[test]
+fn a_variable_set_by_a_collection_script_reaches_the_request_it_wraps() {
+    let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new();
+    f.write_collection("acme", "---\n---\n\n-- pre --\n\nsign();\n");
+    f.write(
+        "acme/ping",
+        &format!(
+            "---\nurl: {}/ping\nquery:\n  sig: '{{{{signature}}}}'\n---\n",
+            stub.base
+        ),
+    );
+
+    let engine = FakeEngine::new(|_| {
+        let mut vars = serde_json::Map::new();
+        vars.insert("signature".into(), serde_json::json!("computed-abc"));
+        ScriptExecutionResult {
+            mutation_diff: MutationDiff {
+                variables: Some(vars),
+                ..MutationDiff::default()
+            },
+            ..ScriptExecutionResult::default()
+        }
+    });
+
+    f.run("acme/ping", &engine);
+    assert_eq!(stub.next().path, "/ping?sig=computed-abc");
+}
+
+/// ADR-167: header mutations accumulate across the whole chain, in call order.
+#[test]
+fn header_mutations_accumulate_across_the_chain() {
+    let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new();
+    f.write_collection("acme", "---\n---\n\n-- pre --\n\ncollection();\n");
+    f.write(
+        "acme/ping",
+        &format!(
+            "---\nurl: {}/ping\n---\n\n-- pre --\n\nrequest();\n",
+            stub.base
+        ),
+    );
+
+    let engine = FakeEngine::new(|input| {
+        let name = if input.script.contains("collection") {
+            "X-From-Collection"
+        } else {
+            "X-From-Request"
+        };
+        ScriptExecutionResult {
+            request_mutation_diff: Some(RequestMutationDiff {
+                headers: vec![RequestHeaderMutation::Upsert {
+                    name: name.into(),
+                    value: "1".into(),
+                }],
+            }),
+            ..ScriptExecutionResult::default()
+        }
+    });
+
+    f.run("acme/ping", &engine);
+    let seen = stub.next();
+    assert_eq!(seen.header("x-from-collection"), Some("1"));
+    assert_eq!(seen.header("x-from-request"), Some("1"));
+}
+
+/// ADR-169: a `skipRequest()` anywhere in the pre-request chain aborts the rest of it —
+/// running later scripts for a request that will never be sent is how state gets mutated
+/// for a call that didn't happen.
+#[test]
+fn a_skip_in_a_collection_script_aborts_the_rest_of_the_chain() {
+    let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new();
+    f.write_collection("acme", "---\n---\n\n-- pre --\n\nskipEverything();\n");
+    f.write(
+        "acme/ping",
+        &format!(
+            "---\nurl: {}/ping\n---\n\n-- pre --\n\nneverRuns();\n",
+            stub.base
+        ),
+    );
+
+    let engine = FakeEngine::new(|input| {
+        if input.script.contains("skipEverything") {
+            return ScriptExecutionResult {
+                execution_directive: Some(ExecutionDirective::SkipRequest),
+                ..ScriptExecutionResult::default()
+            };
+        }
+        ScriptExecutionResult::default()
+    });
+
+    let outcome = f.run("acme/ping", &engine);
+    assert!(outcome.target().skipped());
+    let ran: Vec<String> = engine
+        .calls()
+        .iter()
+        .map(|c| c.script.trim().to_string())
+        .collect();
+    assert_eq!(
+        ran,
+        vec!["skipEverything();"],
+        "the request's own script must not run"
+    );
+}
+
+/// Every request in the graph gets its chain — not just the one you named.
+#[test]
+fn every_request_in_the_dag_runs_its_own_scripts() {
+    let stub = Stub::start(2, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new();
+    f.write_collection("acme", "---\n---\n\n-- pre --\n\nshared();\n");
+    f.write(
+        "acme/login",
+        &format!(
+            "---\nmethod: POST\nurl: {}/login\n---\n\n-- post --\n\nloginPost();\n",
+            stub.base
+        ),
+    );
+    f.write(
+        "acme/me",
+        &format!(
+            "---\nurl: {}/me\nparents: [login]\n---\n\n-- pre --\n\nmePre();\n",
+            stub.base
+        ),
+    );
+
+    let engine = FakeEngine::new(|_| ScriptExecutionResult::default());
+    f.run("acme/me", &engine);
+
+    let ran: Vec<String> = engine
+        .calls()
+        .iter()
+        .map(|c| c.script.trim().to_string())
+        .collect();
+    assert_eq!(
+        ran,
+        vec![
+            "shared();",    // login's inherited pre-request
+            "loginPost();", // login's own post-response
+            "shared();",    // me's inherited pre-request
+            "mePre();",     // me's own
+        ]
+    );
+}
+
+/// …and with no engine, an unrun collection script is reported, not silently ignored.
+#[test]
+fn an_unrun_collection_script_is_reported_under_its_collection() {
+    let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new();
+    f.write_collection("acme", "---\n---\n\n-- pre --\n\ncollectionScript();\n");
+    f.write("acme/ping", &format!("---\nurl: {}/ping\n---\n", stub.base));
+
+    let outcome = f.run("acme/ping", &rq::script::NoEngine);
+    assert!(
+        outcome
+            .target()
+            .notes
+            .iter()
+            .any(|n| n.starts_with("acme:") && n.contains("NOT executed")),
+        "{:?}",
+        outcome.target().notes
+    );
+}
