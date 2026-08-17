@@ -64,6 +64,7 @@ import type {
   SendRequestInput,
 } from '../../index.js';
 import type { SandboxHostCallbacks } from '../../index.js';
+import type { VariableResolver } from '../../definitions/_deps.js';
 
 /** Type predicate: checks that a value has the shape of a TestResult. */
 function isTestResult(value: unknown): value is TestResult {
@@ -144,15 +145,22 @@ function wrapScopeGetsForVmRealm(rq: Record<string, unknown>, vmContext: object)
 export class NodeSandbox implements Sandbox {
   private readonly resolver: PackageResolver | undefined;
   private readonly guardedFetch: typeof fetch;
+  // Injected dynamic-variable resolvers ($guid/faker.*). cross-q-context carries no faker catalog;
+  // the host passes its resolver so developer-mode dynamic variables work with zero regression.
+  private readonly dynamicVariableResolvers: ReadonlyArray<VariableResolver>;
 
   // The link-local/metadata surface is blocked regardless of policy (RQ-3902);
   // `ssrfPolicy` only decides whether the broader private ranges are also blocked.
   // Defaults to the client posture (allow localhost/LAN) since the common host is
   // desktop/CLI where the script runs on the user's own machine; server hosts
   // (scheduled-run-runner) pass STRICT_SSRF_POLICY to also block private ranges.
-  constructor(resolver?: PackageResolver, options?: { readonly ssrfPolicy?: SsrfPolicy }) {
+  constructor(
+    resolver?: PackageResolver,
+    options?: { readonly ssrfPolicy?: SsrfPolicy; readonly dynamicVariableResolvers?: ReadonlyArray<VariableResolver> },
+  ) {
     this.resolver = resolver;
     this.guardedFetch = createGuardedFetch(globalThis.fetch, options?.ssrfPolicy ?? CLIENT_SSRF_POLICY);
+    this.dynamicVariableResolvers = options?.dynamicVariableResolvers ?? [];
   }
 
   getFeatures(): Promise<FeatureFlags> {
@@ -431,6 +439,7 @@ export class NodeSandbox implements Sandbox {
         input.entryType,
         runRequestImpl,
         trackedFetch,
+        this.dynamicVariableResolvers,
       );
       drainCookieMutations = built.drainCookieMutations;
 
