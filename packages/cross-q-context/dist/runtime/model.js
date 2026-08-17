@@ -64,3 +64,14 @@ export var GrpcMethodType;
     GrpcMethodType["clientStreaming"] = "client_streaming";
     GrpcMethodType["bidiStreaming"] = "bidi_streaming";
 })(GrpcMethodType || (GrpcMethodType = {}));
+// ── variables ───────────────────────────────────────────────────────────────────────────────
+/** A variable's value type. Canonical enum (matches the app's) — the executor compares against
+ * `secret` and maps raw mutation types onto these members. */
+export var VariableDataType;
+(function (VariableDataType) {
+    VariableDataType["string"] = "string";
+    VariableDataType["number"] = "number";
+    VariableDataType["boolean"] = "boolean";
+    VariableDataType["secret"] = "secret";
+    VariableDataType["array"] = "array";
+})(VariableDataType || (VariableDataType = {}));

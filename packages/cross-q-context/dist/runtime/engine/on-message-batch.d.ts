@@ -11,8 +11,9 @@
  * one `execute()` over K messages is indistinguishable from K executions, in
  * EITHER engine.
  */
-import type { CookieJarMutation, MutationDiff, RequestHeaderMutation, ScriptExecutionResult, ScriptMessageError, TestResult } from '../index.js';
-import type { RawScopeMutations } from '../index.js';
+import type { CookieJarMutation, MutationDiff, ScriptExecutionResult, ScriptMessageError, TestResult } from './host-types.js';
+import type { RequestHeaderMutation } from '../index.js';
+import type { RawScopeMutations } from '../definitions/rqMethods.js';
 /**
  * Static message for a per-message deadline overrun (`gr-static-error-messages`).
  * Both engines report the same string; the message index is what varies, and it
