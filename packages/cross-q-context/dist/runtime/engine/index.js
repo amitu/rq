@@ -10,6 +10,9 @@
 // The execute entry — run a (transformed) rq.* script safely in QuickJS and get its result.
 export { executeScript } from './execute.js';
 export { createFetchBridge } from './fetch-bridge.js';
+// SSRF guard (the direct-fetch path's egress denylist) + the delegated-fetch helpers.
+export { createGuardedFetch, createGuardedLookup, isAddressBlocked, SsrfBlockedError, CLIENT_SSRF_POLICY, STRICT_SSRF_POLICY, } from './ssrf-guard.js';
+export { describeDelegationFailure, toDelegatedFetch } from './delegated-fetch.js';
 export { dumpHandle, marshalToHandle } from './isolated/marshal.js';
 export { createSafeBridge, createIgnoredBridge, pendingAsyncCalls } from './isolated/safe-bridge-factory.js';
 export { dlog, isDebugEnabled } from './isolated/debug-log.js';
