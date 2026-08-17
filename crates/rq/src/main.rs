@@ -43,6 +43,14 @@ struct Cli {
     /// Draw with ASCII instead of box-drawing characters.
     #[arg(long, global = true)]
     ascii: bool,
+
+    /// Environment for bare `rq` (the project browser); defaults to the active one.
+    #[arg(short = 'e', long, value_name = "NAME")]
+    environment: Option<String>,
+
+    /// Set a variable for bare `rq`. Repeatable.
+    #[arg(long = "var", value_name = "KEY=VALUE")]
+    vars: Vec<String>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -199,6 +207,29 @@ fn main() {
 fn dispatch(cli: &Cli) -> Result<i32> {
     let cwd = std::env::current_dir()?;
     match &cli.command {
+        // Bare `rq` opens the project; `rq l` always prints it. Piping bare `rq`
+        // prints too — a command that blocked on a terminal that isn't there would be
+        // a bad citizen in a shell pipeline.
+        None if console::available() => {
+            let project = open(cli, &cwd)?;
+            let mut cli_vars = Vec::new();
+            for raw in &cli.vars {
+                cli_vars.push(vars::parse_assignment(raw)?);
+            }
+            let opts = RunOptions {
+                cli_vars,
+                environment: cli.environment.clone(),
+                interactive: false,
+                ..RunOptions::default()
+            };
+            let engine = script::NoEngine;
+            console::browse(console::Nav {
+                project: &project,
+                opts: &opts,
+                engine: &engine,
+            })?;
+            Ok(0)
+        }
         None | Some(Command::L) => {
             let project = open(cli, &cwd)?;
             list(&project);

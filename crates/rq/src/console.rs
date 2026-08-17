@@ -81,6 +81,8 @@ pub struct Console<'a> {
     message: Option<String>,
     /// The form being filled in, when there is one.
     form: Option<FormState>,
+    /// The project's requests, when that is what is showing.
+    list: Option<ListState>,
     /// Which link `enter` would open. Digits reach the first nine; this reaches all of
     /// them, which matters the moment a page lists more than nine things.
     link_cursor: usize,
@@ -101,6 +103,7 @@ impl<'a> Console<'a> {
             width: 100,
             message: None,
             form: None,
+            list: None,
             link_cursor: 0,
         }
     }
@@ -110,6 +113,26 @@ impl<'a> Console<'a> {
             nav: Some(nav),
             ..Console::new(run)
         }
+    }
+
+    /// A console with nothing run yet: the project's request list *is* the home page.
+    pub fn browser(nav: Nav<'a>) -> Self {
+        let mut console = Self {
+            nav: Some(nav),
+            history: Vec::new(),
+            step: 0,
+            ..Console::new(Run {
+                steps: Vec::new(),
+                view: None,
+                raw: String::new(),
+                vars: Vec::new(),
+                notes: Vec::new(),
+                secrets: Vec::new(),
+            })
+        };
+        console.history.clear();
+        console.open_list();
+        console
     }
 
     pub fn run(&self) -> &Run {
@@ -308,9 +331,9 @@ impl<'a> Console<'a> {
 
     fn footer(&self) -> String {
         let keys = if self.nav.is_some() && !self.run().links().is_empty() {
-            "tab/1-9 pick · enter open · backspace back · f form · ←/→ pane · q quit"
+            "tab/1-9 pick · enter open · backspace back · l list · f form · q quit"
         } else if self.nav.is_some() {
-            "f form · ↑/↓ step · ←/→ pane · j/k scroll · q quit"
+            "l list · f form · ↑/↓ step · ←/→ pane · j/k scroll · q quit"
         } else {
             "↑/↓ step · ←/→ pane · j/k scroll · q quit"
         };
@@ -326,6 +349,9 @@ impl<'a> Console<'a> {
         // would quit, which is the sort of thing you only forgive once.
         if self.form.is_some() {
             return self.on_form_key(key);
+        }
+        if self.list.is_some() {
+            return self.on_list_key(key);
         }
         let page = self.height.saturating_sub(8).max(1);
         match key.code {
@@ -377,6 +403,7 @@ impl<'a> Console<'a> {
             KeyCode::Char('h') => self.pane = Pane::Headers,
             KeyCode::Char('t') => self.pane = Pane::Timing,
             KeyCode::Char('f') => self.open_form(),
+            KeyCode::Char('l') => self.open_list(),
             _ => {}
         }
         true
@@ -384,6 +411,22 @@ impl<'a> Console<'a> {
 
     /// One frame, as lines — separated from drawing so it can be tested without a terminal.
     pub fn frame(&self) -> Vec<String> {
+        if let Some(list) = &self.list {
+            let mut out = list.lines(self.width);
+            while out.len() + 2 < self.height {
+                out.push(String::new());
+            }
+            let keys = if self.history.is_empty() {
+                "↑/↓ pick · enter open · q quit"
+            } else {
+                "↑/↓ pick · enter open · esc back to the page · q quit"
+            };
+            out.push(match &self.message {
+                Some(message) => format!("{}  {}", ui::cyan(message), ui::dim(keys)),
+                None => ui::dim(keys),
+            });
+            return out;
+        }
         if let Some(form) = &self.form {
             let mut out = form.lines(self.width);
             while out.len() + 2 < self.height {
@@ -669,6 +712,227 @@ fn form_of(
     Ok(Some(FormState::new(rel.to_string(), title, fields)))
 }
 
+// ---------------------------------------------------------------------------------------
+// The request list
+// ---------------------------------------------------------------------------------------
+
+/// Every request in the project, as a page you can open one from. This is what bare `rq`
+/// shows: the project is the home page, and running something is picking it off a list
+/// rather than remembering its name.
+pub struct ListState {
+    pub rows: Vec<ListRow>,
+    pub cursor: usize,
+}
+
+pub struct ListRow {
+    pub rel: String,
+    pub name: String,
+    pub method: String,
+    pub url: String,
+    pub depth: usize,
+    /// A collection's landing page reads differently from a request under it.
+    pub is_index: bool,
+}
+
+impl ListState {
+    fn of(project: &Project) -> ListState {
+        let rows = project
+            .requests()
+            .map(|(idx, entry)| {
+                let (method, url) = project
+                    .load(idx)
+                    .map(|(doc, _)| {
+                        (
+                            doc.front.method.clone().unwrap_or_else(|| "GET".into()),
+                            doc.front.url.clone().unwrap_or_default(),
+                        )
+                    })
+                    .unwrap_or_else(|_| ("?".into(), String::new()));
+                ListRow {
+                    depth: entry.rel.matches('/').count(),
+                    is_index: entry.kind == crate::project::Kind::Collection,
+                    rel: entry.rel.clone(),
+                    name: entry.name.clone(),
+                    method,
+                    url,
+                }
+            })
+            .collect();
+        ListState { rows, cursor: 0 }
+    }
+
+    fn lines(&self, width: usize) -> Vec<String> {
+        if self.rows.is_empty() {
+            return vec![
+                ui::bold("No requests yet"),
+                String::new(),
+                ui::dim("  rq curl --save-as <name> '<curl …>'  saves your first"),
+            ];
+        }
+        // The path, not the leaf: `mine/me` is both unambiguous and exactly what you would
+        // type. Indenting leaves under a collection header that isn't in the list only looks
+        // like a tree.
+        let name_width = self
+            .rows
+            .iter()
+            .map(|r| r.rel.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(36);
+
+        let mut out = vec![
+            ui::bold(&format!("{} requests", self.rows.len())),
+            String::new(),
+        ];
+        for (i, row) in self.rows.iter().enumerate() {
+            let marker = if i == self.cursor {
+                ui::cyan(ui::arrow())
+            } else {
+                " ".to_string()
+            };
+            let shown = format!("{}{}", row.rel, if row.is_index { "/" } else { "" });
+            let label = if i == self.cursor {
+                ui::bold(&shown)
+            } else {
+                shown.clone()
+            };
+            let pad = name_width.saturating_sub(shown.chars().count());
+            let room = width.saturating_sub(name_width + 14);
+            out.push(format!(
+                "{marker} {label}{} {:<6} {}",
+                " ".repeat(pad),
+                ui::dim(&row.method),
+                ui::dim(&truncate(&row.url, room.max(20)))
+            ));
+        }
+        out
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    format!(
+        "{}…",
+        s.chars().take(max.saturating_sub(1)).collect::<String>()
+    )
+}
+
+impl Console<'_> {
+    /// Show the project's requests.
+    pub fn open_list(&mut self) {
+        let Some(nav) = &self.nav else {
+            self.message = Some("this console has no project to list".into());
+            return;
+        };
+        let mut list = ListState::of(nav.project);
+        // Land on the request you are looking at, so `l` answers "where am I" as well as
+        // "what else is there".
+        if let Some(current) = self
+            .history
+            .get(self.cursor)
+            .map(|r| r.target().rel.clone())
+        {
+            if let Some(i) = list.rows.iter().position(|r| r.rel == current) {
+                list.cursor = i;
+            }
+        }
+        self.list = Some(list);
+        self.message = None;
+    }
+
+    pub fn close_list(&mut self) {
+        // With nothing run yet the list *is* the console — there is nowhere to close to.
+        if !self.history.is_empty() {
+            self.list = None;
+            self.message = None;
+        }
+    }
+
+    /// Run whatever the cursor is on, and make it the current page.
+    pub fn open_selected(&mut self) {
+        let (Some(nav), Some(list)) = (&self.nav, &self.list) else {
+            return;
+        };
+        let Some(row) = list.rows.get(list.cursor) else {
+            return;
+        };
+        let rel = row.rel.clone();
+
+        // A request that declares a form asks to be filled in, not fired — the same rule
+        // links follow.
+        let page_vars = self
+            .history
+            .last()
+            .map(|r| r.vars.clone())
+            .unwrap_or_default();
+        match form_of(nav.project, &rel, &page_vars) {
+            Ok(Some(state)) => {
+                self.list = None;
+                self.form = Some(state);
+                self.message = Some(format!("→ {rel}"));
+                return;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                self.message = Some(format!("{rel}: {e:#}"));
+                return;
+            }
+        }
+
+        let outcome = nav
+            .project
+            .resolve(&rel)
+            .and_then(|idx| crate::run::run(nav.project, idx, nav.opts, nav.engine));
+        match outcome {
+            Ok(next) => {
+                self.history.truncate(self.cursor_end());
+                self.history.push(next);
+                self.cursor = self.history.len() - 1;
+                self.step = self.run().steps.len().saturating_sub(1);
+                self.pane = Pane::View;
+                self.scroll = 0;
+                self.link_cursor = 0;
+                self.list = None;
+                self.message = Some(format!("→ {rel}"));
+            }
+            Err(e) => self.message = Some(format!("{e:#}")),
+        }
+    }
+
+    fn cursor_end(&self) -> usize {
+        if self.history.is_empty() {
+            0
+        } else {
+            self.cursor + 1
+        }
+    }
+
+    /// Keys while the list is open.
+    fn on_list_key(&mut self, key: KeyEvent) -> bool {
+        let Some(list) = &mut self.list else {
+            return true;
+        };
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return false,
+            KeyCode::Char('q') => return false,
+            KeyCode::Esc | KeyCode::Char('l') => self.close_list(),
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                list.cursor = list.cursor.saturating_sub(1)
+            }
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                list.cursor = (list.cursor + 1).min(list.rows.len().saturating_sub(1))
+            }
+            KeyCode::Home => list.cursor = 0,
+            KeyCode::End => list.cursor = list.rows.len().saturating_sub(1),
+            KeyCode::Enter => self.open_selected(),
+            _ => {}
+        }
+        true
+    }
+}
+
 fn step_pane(pane: Pane, delta: isize) -> Pane {
     let i = Pane::ALL.iter().position(|p| *p == pane).unwrap_or(0) as isize;
     let n = Pane::ALL.len() as isize;
@@ -727,12 +991,22 @@ pub fn open(run: Run, nav: Option<Nav<'_>>) -> Result<()> {
         Some(nav) => Console::with_nav(run, nav),
         None => Console::new(run),
     };
+    draw(&mut console)
+}
+
+/// Open the console on the project itself, with nothing run yet.
+pub fn browse(nav: Nav<'_>) -> Result<()> {
+    let mut console = Console::browser(nav);
+    draw(&mut console)
+}
+
+fn draw(console: &mut Console<'_>) -> Result<()> {
     let mut out = io::stdout();
 
     enable_raw_mode()?;
     execute!(out, crossterm::terminal::EnterAlternateScreen, cursor::Hide)?;
 
-    let result = event_loop(&mut console, &mut out);
+    let result = event_loop(console, &mut out);
 
     execute!(out, crossterm::terminal::LeaveAlternateScreen, cursor::Show)?;
     disable_raw_mode()?;
