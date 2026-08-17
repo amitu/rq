@@ -41,6 +41,7 @@ cq-report = { path = "../cq-report" }
 tempfile.workspace = true
 # The example backend the example project runs against.
 rq-testbed = { path = "../rq-testbed" }
+crossterm = "0.29"
 
 [lints]
 workspace = true

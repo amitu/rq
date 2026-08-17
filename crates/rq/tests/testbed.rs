@@ -190,3 +190,88 @@ fn the_root_collection_reaches_every_request() {
         "the root collection's User-Agent never went out:\n{echoed}"
     );
 }
+
+// --- the console navigates -----------------------------------------------------------------
+
+/// The demo path: open a run, press a digit, land on the next page, backspace to return.
+/// Driven through the library rather than a terminal, so the navigation is tested even
+/// though the drawing needs a tty.
+#[test]
+fn the_console_follows_links_and_goes_back() {
+    let f = Fixture::new();
+    let project = rq::project::Project::open(project()).unwrap();
+    let opts = rq::run::RunOptions {
+        cli_vars: vec![("host".into(), f.server.base_url.clone())],
+        environment: Some("local".into()),
+        ..rq::run::RunOptions::default()
+    };
+    let engine = rq::script::NoEngine;
+    let target = project.resolve("issues").unwrap();
+    let first = rq::run::run(&project, target, &opts, &engine).unwrap();
+
+    let mut console = rq::console::Console::with_nav(
+        first,
+        rq::console::Nav {
+            project: &project,
+            opts: &opts,
+            engine: &engine,
+        },
+    );
+
+    let links = console.links();
+    assert!(links.len() >= 5, "the issues table should link every row");
+    assert!(
+        links[0].target.starts_with("issue?number="),
+        "{:?}",
+        links[0]
+    );
+
+    // Open the first row — through the key, not the method, because the key is what a
+    // person presses.
+    console.on_key(crossterm::event::KeyEvent::from(
+        crossterm::event::KeyCode::Char('1'),
+    ));
+    assert_eq!(console.run().target().rel, "issue");
+    let page = console.body().join("\n");
+    assert!(page.contains("Issue 1287"), "{page}");
+
+    // …and back to where we were.
+    console.on_key(crossterm::event::KeyEvent::from(
+        crossterm::event::KeyCode::Backspace,
+    ));
+    assert_eq!(console.run().target().rel, "issues");
+    assert!(console.body().join("\n").contains("open issues"));
+
+    // Back from the first page says so rather than doing something surprising.
+    console.back();
+    assert_eq!(console.run().target().rel, "issues");
+}
+
+#[test]
+fn a_link_that_does_not_exist_leaves_the_page_you_are_on() {
+    let f = Fixture::new();
+    let project = rq::project::Project::open(project()).unwrap();
+    let opts = rq::run::RunOptions {
+        cli_vars: vec![("host".into(), f.server.base_url.clone())],
+        environment: Some("local".into()),
+        ..rq::run::RunOptions::default()
+    };
+    let engine = rq::script::NoEngine;
+    let target = project.resolve("issues").unwrap();
+    let run = rq::run::run(&project, target, &opts, &engine).unwrap();
+
+    let mut console = rq::console::Console::with_nav(
+        run,
+        rq::console::Nav {
+            project: &project,
+            opts: &opts,
+            engine: &engine,
+        },
+    );
+    console.follow(99);
+    assert_eq!(
+        console.run().target().rel,
+        "issues",
+        "a bad link must not lose the page you were reading"
+    );
+}

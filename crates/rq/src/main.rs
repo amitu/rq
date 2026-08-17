@@ -421,7 +421,14 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
 
     if args.console {
         if console::available() {
-            console::open(&outcome)?;
+            // The console navigates: its links run through the same project, options and
+            // engine this run used, so following one stays in the same session.
+            let nav = console::Nav {
+                project,
+                opts: &opts,
+                engine: &engine,
+            };
+            console::open(outcome.clone(), Some(nav))?;
         } else {
             ui::note("--console needs a terminal; printed the run instead");
         }

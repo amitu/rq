@@ -94,7 +94,9 @@ rq l               # the tree: every request, its method, what it depends on
 rq r me -c         # the console: arrow between the steps of a run, drill into each
 ```
 
-The console is the browser network panel for your terminal — every step of the run, its
+In the console, a digit opens that link and `backspace` goes back — the run you are
+reading becomes a place you can move around in. It is also the browser network panel for
+your terminal — every step of the run, its
 request, its response, its headers, and where the milliseconds actually went — over the run
 you already did. Nothing is re-sent, and there is no second `--verbose` pass.
 
