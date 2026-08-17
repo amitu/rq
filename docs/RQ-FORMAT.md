@@ -209,6 +209,26 @@ the engine lands:
 | `rq.execution.setNextRequest(...)` | is **refused out loud** — `rq` walks the graph a request declares with `parents:`, so there is no linear order to redirect |
 | `rq.cookies.jar(host)` | is seeded from the run's cookie jar (below) |
 
+**Scripts form a chain, and a collection's scripts wrap its requests.** Every request in
+the run — not just the one you named — executes its own chain:
+
+```
+pre-request    root collection → … → nearest collection → the request
+post-response  the request → nearest collection → … → root collection
+```
+
+Pre-request runs outermost-in, post-response innermost-out, so a collection's scripts
+*surround* the requests beneath it rather than merely preceding them. Along the chain:
+
+- variables one script sets are visible to the next, **and** are substituted into the
+  request before it is sent — the request is re-prepared after every script;
+- header changes accumulate in call order;
+- a `skipRequest()` aborts the rest of the chain, because running later scripts for a
+  request that will never be sent mutates state for a call that didn't happen.
+
+This is the app's own execution order (ADR-061's "sandwich", plus ADR-020/167/169), matched
+deliberately: a collection has to behave the same whether it runs here or there.
+
 `--script-timeout <ms>` bounds each script. The CLI runs the **safe** engine only:
 `developer` mode is `node:vm`, which is not a security boundary, and a terminal client that
 ran a collection's scripts with host access would be a liability rather than a feature.
@@ -270,7 +290,8 @@ stores a parent id, so `git mv` is a legal way to reorganize. `__`-prefixed dire
 
 `__collection.md` uses the same frontmatter, and its `headers`, `auth`, and `vars` are
 inherited by every request beneath it — nearer collections win, and a request always wins
-over its collections.
+over its collections. Its `-- pre --` / `-- post --` sections run around every request
+beneath it too (§6).
 
 **Environments** are the same document with only a `vars:` block, so there is one format to
 learn. `__global.md` is the global environment; it applies under whichever environment is

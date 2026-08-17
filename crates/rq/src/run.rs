@@ -177,9 +177,6 @@ pub fn run(
             .with_context(|| entry.rel.clone())?;
         secrets.extend(v.secret_values());
 
-        let mut prepared =
-            prepare(&doc, &inherited, &v, &mut step_notes).with_context(|| entry.rel.clone())?;
-
         let meta = script::ExecutionMetadata {
             request_id: entry.rel.clone(),
             request_name: entry.name.clone(),
@@ -193,27 +190,62 @@ pub fn run(
         };
         let mut tests: Vec<TestResult> = Vec::new();
         let mut logs: Vec<LogEntry> = Vec::new();
+
+        // --- the pre-request chain ----------------------------------------------------
+        //
+        // Collection scripts run outermost first, then the request's own (ADR-061's
+        // "sandwich": pre-request root→request, post-response request→root). Header
+        // mutations accumulate across the chain in call order (ADR-167), the request is
+        // re-prepared after every script so a variable one sets reaches the next one and
+        // the request itself (ADR-020), and a `skipRequest()` aborts the rest of the chain
+        // rather than letting later scripts run for a request that will never be sent
+        // (ADR-169).
+        let mut prepare_notes = Vec::new();
+        let mut prepared =
+            prepare(&doc, &inherited, &v, &mut prepare_notes).with_context(|| entry.rel.clone())?;
+        let mut header_mutations: Vec<RequestHeaderMutation> = Vec::new();
         let mut skip = false;
 
-        // --- pre-request -------------------------------------------------------------
-        if let Some(source) = doc.section("pre").filter(|s| !s.trim().is_empty()) {
+        for (label, source) in pre_chain(&inherited, &doc) {
             let input = script::ScriptExecutionInput {
-                script: source.to_string(),
+                script: source,
                 phase: ScriptPhase::PreRequest,
                 mode: script::ScriptExecutionMode::Safe,
                 context: build_context(&prepared, None, &v, &jar, meta.clone()),
                 timeout_ms: opts.script_timeout_ms,
             };
-            let result = engine.execute(&input).with_context(|| entry.rel.clone())?;
-            apply_request_mutations(&mut prepared, &result, &mut step_notes);
+            let result = engine
+                .execute(&input)
+                .with_context(|| format!("{}: {label}", entry.rel))?;
+            if let Some(diff) = &result.request_mutation_diff {
+                header_mutations.extend(diff.headers.iter().cloned());
+            }
             skip = absorb(
                 &result,
                 ScriptPhase::PreRequest,
+                &label,
+                &mut v,
                 &mut runtime,
                 &mut tests,
                 &mut logs,
                 &mut step_notes,
             );
+
+            prepare_notes.clear();
+            prepared = prepare(&doc, &inherited, &v, &mut prepare_notes)
+                .with_context(|| entry.rel.clone())?;
+            apply_header_mutations(&mut prepared, &header_mutations);
+
+            if skip {
+                break;
+            }
+        }
+        step_notes.append(&mut prepare_notes);
+        if !header_mutations.is_empty() {
+            step_notes.push(format!(
+                "the pre-request chain changed {} header(s)",
+                header_mutations.len()
+            ));
         }
 
         http::check_url(&prepared.url).with_context(|| entry.rel.clone())?;
@@ -243,27 +275,33 @@ pub fn run(
             .map(|r| context_of(&prepared, r, &v))
             .unwrap_or(serde_json::Value::Null);
 
-        // --- post-response -----------------------------------------------------------
-        if let (Some(source), Some(resp)) = (
-            doc.section("post").filter(|s| !s.trim().is_empty()),
-            response.as_ref(),
-        ) {
-            let input = script::ScriptExecutionInput {
-                script: source.to_string(),
-                phase: ScriptPhase::PostResponse,
-                mode: script::ScriptExecutionMode::Safe,
-                context: build_context(&prepared, Some(resp), &v, &jar, meta),
-                timeout_ms: opts.script_timeout_ms,
-            };
-            let result = engine.execute(&input).with_context(|| entry.rel.clone())?;
-            absorb(
-                &result,
-                ScriptPhase::PostResponse,
-                &mut runtime,
-                &mut tests,
-                &mut logs,
-                &mut step_notes,
-            );
+        // --- the post-response chain --------------------------------------------------
+        // Reversed (ADR-061): the request's own script first, then outward through its
+        // collections — so a collection wraps its requests rather than merely preceding
+        // them.
+        if let Some(resp) = response.as_ref() {
+            for (label, source) in post_chain(&inherited, &doc) {
+                let input = script::ScriptExecutionInput {
+                    script: source,
+                    phase: ScriptPhase::PostResponse,
+                    mode: script::ScriptExecutionMode::Safe,
+                    context: build_context(&prepared, Some(resp), &v, &jar, meta.clone()),
+                    timeout_ms: opts.script_timeout_ms,
+                };
+                let result = engine
+                    .execute(&input)
+                    .with_context(|| format!("{}: {label}", entry.rel))?;
+                absorb(
+                    &result,
+                    ScriptPhase::PostResponse,
+                    &label,
+                    &mut v,
+                    &mut runtime,
+                    &mut tests,
+                    &mut logs,
+                    &mut step_notes,
+                );
+            }
         }
 
         let mut captured = Vec::new();
@@ -377,11 +415,57 @@ fn env_value(spec: &VarSpec) -> Option<String> {
 #[derive(Debug, Default)]
 pub struct Inherited {
     pub headers: Vec<(String, String)>,
+    /// Each enclosing collection's own scripts, **outermost first**.
+    pub scripts: Vec<CollectionScripts>,
     pub declared: Vec<(String, VarSpec)>,
     pub auth: Option<AuthSpec>,
     pub timeout: Option<u64>,
     pub follow_redirects: Option<bool>,
     pub verify_tls: Option<bool>,
+}
+
+/// One collection's `-- pre --` / `-- post --`, with the name to report them under.
+#[derive(Clone, Debug)]
+pub struct CollectionScripts {
+    pub label: String,
+    pub pre: Option<String>,
+    pub post: Option<String>,
+}
+
+/// The pre-request chain: every enclosing collection outermost first, then the request.
+fn pre_chain(inherited: &Inherited, doc: &Document) -> Vec<(String, String)> {
+    let mut chain: Vec<(String, String)> = inherited
+        .scripts
+        .iter()
+        .filter_map(|c| c.pre.clone().map(|s| (c.label.clone(), s)))
+        .collect();
+    if let Some(own) = section(doc, "pre") {
+        chain.push(("this request".to_string(), own));
+    }
+    chain
+}
+
+/// The post-response chain: the request first, then outward — ADR-061's sandwich, so a
+/// collection's script *wraps* its requests instead of merely preceding them.
+fn post_chain(inherited: &Inherited, doc: &Document) -> Vec<(String, String)> {
+    let mut chain: Vec<(String, String)> = Vec::new();
+    if let Some(own) = section(doc, "post") {
+        chain.push(("this request".to_string(), own));
+    }
+    chain.extend(
+        inherited
+            .scripts
+            .iter()
+            .rev()
+            .filter_map(|c| c.post.clone().map(|s| (c.label.clone(), s))),
+    );
+    chain
+}
+
+fn section(doc: &Document, name: &str) -> Option<String> {
+    doc.section(name)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
 }
 
 impl Inherited {
@@ -401,6 +485,14 @@ impl Inherited {
             match &doc.front.auth {
                 Some(AuthSpec::Inherit) | None => {}
                 Some(a) => out.auth = Some(a.clone()),
+            }
+            let (pre, post) = (section(&doc, "pre"), section(&doc, "post"));
+            if pre.is_some() || post.is_some() {
+                out.scripts.push(CollectionScripts {
+                    label: rel.clone(),
+                    pre,
+                    post,
+                });
             }
             out.timeout = doc.front.timeout.or(out.timeout);
             out.follow_redirects = doc.front.follow_redirects.or(out.follow_redirects);
@@ -799,17 +891,10 @@ fn response_json(resp: &Response) -> serde_json::Value {
     })
 }
 
-/// Apply `rq.request.headers.*` changes a pre-request script recorded. Order matters — the
-/// diff is a log of what the script did, replayed in the same sequence.
-fn apply_request_mutations(
-    prepared: &mut Prepared,
-    result: &ScriptExecutionResult,
-    notes: &mut Vec<String>,
-) {
-    let Some(diff) = &result.request_mutation_diff else {
-        return;
-    };
-    for mutation in &diff.headers {
+/// Replay the accumulated `rq.request.headers.*` changes onto a freshly prepared request.
+/// Order matters — the diff is a log of what the chain did, replayed in the same sequence.
+fn apply_header_mutations(prepared: &mut Prepared, mutations: &[RequestHeaderMutation]) {
+    for mutation in mutations {
         match mutation {
             RequestHeaderMutation::Add { name, value } => {
                 prepared.headers.push((name.clone(), value.clone()));
@@ -828,20 +913,17 @@ fn apply_request_mutations(
             RequestHeaderMutation::Clear => prepared.headers.clear(),
         }
     }
-    if !diff.headers.is_empty() {
-        notes.push(format!(
-            "the pre-request script changed {} header(s)",
-            diff.headers.len()
-        ));
-    }
 }
 
 /// Fold one script result into the run: variables into the same runtime layer `capture:`
 /// writes to, tests and logs onto the step, everything else onto the record. Returns
 /// whether the script asked to skip the request.
+#[allow(clippy::too_many_arguments)]
 fn absorb(
     result: &ScriptExecutionResult,
     phase: ScriptPhase,
+    label: &str,
+    v: &mut Vars,
     runtime: &mut Vec<(String, String)>,
     tests: &mut Vec<TestResult>,
     logs: &mut Vec<LogEntry>,
@@ -849,17 +931,23 @@ fn absorb(
 ) -> bool {
     for (key, value) in result.mutation_diff.all() {
         runtime.retain(|(k, _)| k != key);
-        match value {
-            serde_json::Value::Null => {} // an unset: removing it above is the whole job
-            serde_json::Value::String(s) => runtime.push((key.clone(), s.clone())),
-            other => runtime.push((key.clone(), other.to_string())),
+        let resolved = match value {
+            serde_json::Value::Null => None, // an unset
+            serde_json::Value::String(s) => Some(s.clone()),
+            other => Some(other.to_string()),
+        };
+        if let Some(value) = resolved {
+            runtime.push((key.clone(), value.clone()));
+            // Also into this step's own set, so the next script in the chain sees it and
+            // the re-prepared request substitutes it.
+            v.set(key.clone(), value, "script");
         }
     }
     tests.extend(result.test_results.iter().cloned());
     logs.extend(result.logs.iter().cloned());
 
     if let Some(error) = &result.error {
-        notes.push(error.clone());
+        notes.push(format!("{label}: {error}"));
     }
     match &result.execution_directive {
         Some(script::ExecutionDirective::SkipRequest) => {
