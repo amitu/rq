@@ -65,6 +65,22 @@ export type RunRequestEnvelope = {
     ok: false;
     error: RunRequestError;
 };
+/** Host capability that runs a saved request on a script's behalf (`rq.execution.runRequest`). The
+ * sandbox never performs the sub-run itself — the host injects this and the run-request bridge
+ * marshals the descriptor/envelope across the isolate edge. */
+export interface RunRequestHost {
+    runRequest(descriptor: RunRequestDescriptor): Promise<RunRequestEnvelope>;
+}
+/** Where a script error points, resolved to the user's editor coordinates (internal wrapper frames
+ * removed, offsets corrected). All fields absent when no user-script frame could be anchored. */
+export interface ScriptErrorLocation {
+    /** 1-based line of the innermost user-script frame. */
+    line?: number;
+    /** 1-based column of the innermost user-script frame. */
+    column?: number;
+    /** Full multi-line stack for display — ready to render verbatim; do not re-parse. */
+    stack?: string;
+}
 /** Injected variable resolver ($guid, {{var}} substitution, …). Opaque here — its implementation
  * and full parameter/return model stay host-side; the rq.* API only holds and invokes it. */
 export interface VariableResolver {

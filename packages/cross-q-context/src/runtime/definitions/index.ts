@@ -40,6 +40,17 @@ export {
   type RunRequestResponse,
   type ScriptRunRequest,
 } from './runRequest.js';
+// Runtime-contract leaf types the executor's bridges reference (host-injected run-request +
+// script-error location + the phase descriptor table). Surfaced from the dependency seam.
+export { PHASE_DESCRIPTORS } from './_deps.js';
+export type {
+  RunRequestDescriptor,
+  RunRequestEnvelope,
+  RunRequestError,
+  RunRequestErrorKind,
+  RunRequestHost,
+  ScriptErrorLocation,
+} from './_deps.js';
 export {
   createSendRequest,
   SendRequestError,

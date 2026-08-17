@@ -36,10 +36,19 @@ export interface TestResult {
     status: TestStatus;
     error?: string;
 }
+/** The `console.*` methods captured during execution. */
+export declare enum LogLevel {
+    log = "log",
+    warn = "warn",
+    error = "error",
+    info = "info"
+}
 /** A `console.*` line captured during execution. */
 export interface LogEntry {
     level: string;
     args: Json[];
+    /** ms epoch when the line was captured (set by the console bridge). */
+    timestamp?: number;
 }
 /**
  * The net variable changes per scope — `key → new value` for a set, `key → null` for unset/clear.

@@ -24,3 +24,30 @@ export { UTIL_ISOLATE_SHIM } from './isolated/shims/util.shim.js';
 export { ZLIB_ISOLATE_SHIM } from './isolated/shims/zlib.shim.js';
 export { RQ_ISOLATE_SHIM, RQ_ITERATION_RESET_EXPR, RQ_COLLECT_EXPR } from './isolated/isolated-rq.js';
 export type { InIsolateCollected } from './isolated/isolated-rq.js';
+
+// Capability bridges — the host-side halves that back the guest shims (console/process/fetch's
+// run-request/streams/deprecations/timers). Each pairs a createXBridge() (or a constant table)
+// with its *_ISOLATE_SHIM guest string. Installed by the host layer before the realm evals.
+export { createConsoleBridge, CONSOLE_ISOLATE_SHIM } from './isolated/bridges/console-bridge.js';
+export { PROCESS_ISOLATE_SHIM } from './isolated/bridges/process-bridge.js';
+export { createRunRequestBridge, RUN_REQUEST_ISOLATE_SHIM } from './isolated/bridges/run-request-bridge.js';
+export { STREAM_ISOLATE_SHIM } from './isolated/bridges/stream-bridge.js';
+export {
+  createDeprecationBridge,
+  DEPRECATION_ISOLATE_SHIM,
+  WARN_ONLY_IDENTIFIERS,
+  DEPRECATION_SHIMMED_IDENTIFIERS,
+} from './isolated/bridges/deprecation-bridge.js';
+export { createTimerBridges } from './isolated/bridges/timer-bridge.js';
+
+// Async lifecycle + support.
+export { AsyncRegistry } from './async-registry.js';
+export type { TimerDelegations, AsyncRegistryOptions, SettleFn } from './async-registry.js';
+export { SANDBOX_DEFAULT_TIMEOUT_MS } from './constants.js';
+export {
+  scriptFilenameForPhase,
+  parseScriptErrorLocation,
+  countScriptLines,
+  UserScriptError,
+  WRAPPER_LINE_OFFSET,
+} from './script-error-location.js';

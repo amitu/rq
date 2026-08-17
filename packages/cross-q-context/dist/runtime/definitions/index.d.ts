@@ -9,6 +9,8 @@ export { type AssertionLibs } from './requestResponse.js';
 export { createExecutionNamespace, SkipRequestSignal, type ExecutionDirectiveCollector, type RqExecutionNamespace, type ScriptExecutionLocation, } from './execution.js';
 export { createVisualizer, VISUALIZER_DATA_GLOBAL, type RqVisualizerNamespace, type VisualizerCollector, type VisualizerLibs, } from './visualizer.js';
 export { createRunRequest, RunRequestFailure, MAX_RUN_REQUEST_CALLS, type RunRequestHeaderList, type RunRequestImpl, type RunRequestOptions, type RunRequestResponse, type ScriptRunRequest, } from './runRequest.js';
+export { PHASE_DESCRIPTORS } from './_deps.js';
+export type { RunRequestDescriptor, RunRequestEnvelope, RunRequestError, RunRequestErrorKind, RunRequestHost, ScriptErrorLocation, } from './_deps.js';
 export { createSendRequest, SendRequestError, SendRequestInvalidArgs, type ScriptHeaderList, type ScriptSendRequest, type SendRequestBody, type SendRequestCallback, type SendRequestConfig, type SendRequestErrors, type SendRequestHeaders, type SendRequestInput, type SendRequestResponse, } from './sendRequest.js';
 export { GLOBAL_NAMES } from './codegen/globals-list.js';
 export { DEPRECATED_IDENTIFIERS, SHIMMED_IDENTIFIERS, createDeprecationProxy, createDeprecatedPostmanShims, formatDeprecationMessage, type DeprecatedIdentifier, type DeprecatedIdentifierPolicy, type DeprecationEmit, type ShimmedIdentifier, } from './deprecated-identifiers.js';

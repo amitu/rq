@@ -7,6 +7,9 @@ export { CookieJarHostDenied, CookieJarInvalidUrl, createCookiesNamespace, } fro
 export { createExecutionNamespace, SkipRequestSignal, } from './execution.js';
 export { createVisualizer, VISUALIZER_DATA_GLOBAL, } from './visualizer.js';
 export { createRunRequest, RunRequestFailure, MAX_RUN_REQUEST_CALLS, } from './runRequest.js';
+// Runtime-contract leaf types the executor's bridges reference (host-injected run-request +
+// script-error location + the phase descriptor table). Surfaced from the dependency seam.
+export { PHASE_DESCRIPTORS } from './_deps.js';
 export { createSendRequest, SendRequestError, SendRequestInvalidArgs, } from './sendRequest.js';
 export { GLOBAL_NAMES } from './codegen/globals-list.js';
 export { DEPRECATED_IDENTIFIERS, SHIMMED_IDENTIFIERS, createDeprecationProxy, createDeprecatedPostmanShims, formatDeprecationMessage, } from './deprecated-identifiers.js';
