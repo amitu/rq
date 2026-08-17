@@ -102,6 +102,9 @@ function wrapScopeGetsForVmRealm(rq, vmContext) {
 export class NodeSandbox {
     resolver;
     guardedFetch;
+    // Injected dynamic-variable resolvers ($guid/faker.*). cross-q-context carries no faker catalog;
+    // the host passes its resolver so developer-mode dynamic variables work with zero regression.
+    dynamicVariableResolvers;
     // The link-local/metadata surface is blocked regardless of policy (RQ-3902);
     // `ssrfPolicy` only decides whether the broader private ranges are also blocked.
     // Defaults to the client posture (allow localhost/LAN) since the common host is
@@ -110,6 +113,7 @@ export class NodeSandbox {
     constructor(resolver, options) {
         this.resolver = resolver;
         this.guardedFetch = createGuardedFetch(globalThis.fetch, options?.ssrfPolicy ?? CLIENT_SSRF_POLICY);
+        this.dynamicVariableResolvers = options?.dynamicVariableResolvers ?? [];
     }
     getFeatures() {
         return Promise.resolve({ isolatedVm: true, externalPackages: this.resolver !== undefined });
@@ -344,7 +348,7 @@ export class NodeSandbox {
             const runRequestImpl = runRequestHost
                 ? (descriptor) => runRequestHost.runRequest(descriptor)
                 : undefined;
-            const built = buildRq(executionState, { chai: chaiModule, lodash: lodashModule, ajv: ajvModule, handlebars: handlebarsModule }, input.phase, input.context, input.entryType, runRequestImpl, trackedFetch);
+            const built = buildRq(executionState, { chai: chaiModule, lodash: lodashModule, ajv: ajvModule, handlebars: handlebarsModule }, input.phase, input.context, input.entryType, runRequestImpl, trackedFetch, this.dynamicVariableResolvers);
             drainCookieMutations = built.drainCookieMutations;
             // RQ-5156: count the WHOLE `rq.sendRequest` operation, not just its fetch.
             // The fetch promise resolves BEFORE `sendRequest`'s handler awaits

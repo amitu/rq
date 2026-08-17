@@ -13,6 +13,7 @@ import type { FeatureFlags, ScriptExecutionInput, StreamReader } from '../../ind
 import type { Sandbox, SandboxExecutionEvent } from '../host-types.js';
 import type { PackageResolver } from '../../index.js';
 import type { SandboxHostCallbacks } from '../../index.js';
+import type { VariableResolver } from '../../definitions/_deps.js';
 /**
  * Node.js sandbox execution engine.
  * Each execute() call creates a fresh vm context and runs the user script.
@@ -21,8 +22,10 @@ import type { SandboxHostCallbacks } from '../../index.js';
 export declare class NodeSandbox implements Sandbox {
     private readonly resolver;
     private readonly guardedFetch;
+    private readonly dynamicVariableResolvers;
     constructor(resolver?: PackageResolver, options?: {
         readonly ssrfPolicy?: SsrfPolicy;
+        readonly dynamicVariableResolvers?: ReadonlyArray<VariableResolver>;
     });
     getFeatures(): Promise<FeatureFlags>;
     execute(input: ScriptExecutionInput, hostCallbacks?: SandboxHostCallbacks): Promise<StreamReader<SandboxExecutionEvent>>;
