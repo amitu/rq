@@ -28,6 +28,10 @@
     "./executor": {
       "types": "./dist/runtime/engine/index.d.ts",
       "default": "./dist/runtime/engine/index.js"
+    },
+    "./executor/browser": {
+      "types": "./dist/runtime/engine/browser/index.d.ts",
+      "default": "./dist/runtime/engine/browser/index.js"
     }
   },
   "imports": {
@@ -49,12 +53,16 @@
     "test": "node test/smoke.mjs && node test/executor-smoke.mjs && node test/execute-e2e.mjs && node test/engine-streaming.mjs"
   },
   "dependencies": {
+    "@jitl/quickjs-singlefile-browser-release-asyncify": "^0.32.0",
     "@jitl/quickjs-singlefile-cjs-release-asyncify": "0.32.0",
+    "@noble/hashes": "^1.8.0",
     "@rollup/plugin-commonjs": "28.0.6",
     "@rollup/plugin-json": "6.1.0",
     "@rollup/plugin-node-resolve": "16.0.3",
     "@rollup/wasm-node": "4.40.2",
     "chai": "6.2.2",
+    "fflate": "^0.8.3",
+    "node-inspect-extracted": "^3.3.3",
     "quickjs-emscripten-core": "0.32.0"
   },
   "devDependencies": {

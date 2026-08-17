@@ -38,6 +38,7 @@ export { RQ_ISOLATE_SHIM, RQ_ITERATION_RESET_EXPR, RQ_COLLECT_EXPR } from './iso
 export { REQUIRE_ISOLATE_SHIM, resolveRequire, extractRequireIds } from './isolated/isolated-require.js';
 export { createSourceBundler } from './isolated/source-bundler.js';
 export { ISOLATE_SHIMS } from './isolated/isolate-shim-order.js';
+export { VENDOR_IIFES } from './vendor-codegen/vendor-iifes.js';
 export { NEEDS_BRIDGE_MODULE_GLOBALS } from './isolated/needs-bridge-globals.js';
 export { createImpossiblePackageError } from './isolated/impossible-error.js';
 export { PACKAGE_ERROR_SENTINEL, isScriptPackageUnsupportedError, createPackageError, } from './isolated/package-error-sentinel.js';

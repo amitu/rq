@@ -68,6 +68,7 @@ export type { BundleRequireDeps, PrebundledRequires } from './isolated/isolated-
 export { createSourceBundler } from './isolated/source-bundler.js';
 export type { BundleCache, SourceBundler } from './isolated/source-bundler.js';
 export { ISOLATE_SHIMS } from './isolated/isolate-shim-order.js';
+export { VENDOR_IIFES } from './vendor-codegen/vendor-iifes.js';
 export { NEEDS_BRIDGE_MODULE_GLOBALS } from './isolated/needs-bridge-globals.js';
 export { createImpossiblePackageError } from './isolated/impossible-error.js';
 export {
