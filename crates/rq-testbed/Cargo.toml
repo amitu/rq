@@ -1,0 +1,26 @@
+[package]
+name = "rq-testbed"
+description = "A small HTTP API to point rq at — the backend the examples talk about."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "rq-testbed"
+path = "src/main.rs"
+
+[lib]
+name = "rq_testbed"
+path = "src/lib.rs"
+
+[dependencies]
+# std::net and JSON, nothing else: a test backend that dragged in an async runtime would
+# cost more to build in CI than the thing it tests.
+serde_json.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

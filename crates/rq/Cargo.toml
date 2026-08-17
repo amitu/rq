@@ -39,6 +39,8 @@ cq-report = { path = "../cq-report" }
 
 [dev-dependencies]
 tempfile.workspace = true
+# The example backend the example project runs against.
+rq-testbed = { path = "../rq-testbed" }
 
 [lints]
 workspace = true
