@@ -80,4 +80,13 @@ assert.equal(captured.method, 'GET', 'request method marshalled to host');
 assert.equal(fr.mutationDiff.environment.fetchOutcome.localValue, 'ok:200', 'response delivered to the script callback');
 ok('rq.sendRequest → delegated fetch → async response (status 200)');
 
-console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, chai-backed rq.test, AND delegated fetch (rq.sendRequest) — end to end.`);
+// 7. Cookie jar (rq.cookies) — gated to the host allowlist; writes drain as cookie mutations.
+const cookieScript = "const jar = rq.cookies.jar(); await jar.set('https://example.com/', 'sid', 'abc123'); rq.environment.set('cookieDone', 'yes');";
+const cr = await executeScript({ script: cookieScript, phase: 'pre-request', context: { ...context, hostAllowlist: ['example.com'] } });
+assert.ok(!cr.error, `no execution error (got: ${cr.error})`);
+assert.ok(cr.cookieMutations && cr.cookieMutations.length > 0, 'cookie mutations drained');
+assert.ok(cr.cookieMutations.some((m) => m.kind === 'upsert' && m.cookie.name === 'sid' && m.cookie.value === 'abc123'), 'sid cookie upserted for the allowed host');
+assert.equal(cr.mutationDiff.environment.cookieDone.localValue, 'yes', 'script continued past the cookie write');
+ok('rq.cookies.jar().set → allowlist-gated, drained as a cookie mutation');
+
+console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, chai-backed rq.test, delegated fetch, AND cookies — end to end.`);
