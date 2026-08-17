@@ -1,6 +1,7 @@
 import type { VariableData, EnvironmentVariables } from '../model.js';
-import type { LogEntry, RequestMutationDiff, ExecutionDirective } from '../contract.js';
+import type { LogEntry, RequestMutationDiff, ExecutionDirective, DeprecationSignal, StreamReader, RuntimeComponent, SandboxHostCallbacks } from '../contract.js';
 import type { VisualizerDirective, ScriptErrorLocation } from '../definitions/_deps.js';
+import type { ScriptExecutionInput } from '../execution.js';
 /** Per-key net change for a scope — `VariableData` for a set, `null` to delete. */
 export type MutationVariables = Record<string, VariableData | null>;
 /** Collection-scope mutations, tagged with the collection they belong to. */
@@ -149,3 +150,20 @@ export interface ScriptExecutionResult {
     killedByTimeout?: boolean;
 }
 export type { VariableData, EnvironmentVariables };
+/** Live events the engine streams: logs + deprecations as they happen, the (full) result terminal.
+ * The engine's counterpart to contract.ts's guest-layer event — this one carries the inflated
+ * host-side ScriptExecutionResult. */
+export type SandboxExecutionEvent = {
+    type: 'log';
+    log: LogEntry;
+} | {
+    type: 'deprecation';
+    signal: DeprecationSignal;
+} | {
+    type: 'result';
+    result: ScriptExecutionResult;
+};
+/** What the full QuickJsEngine implements — execute streams events to a StreamReader. */
+export interface Sandbox extends RuntimeComponent {
+    execute(input: ScriptExecutionInput, hostCallbacks?: SandboxHostCallbacks): Promise<StreamReader<SandboxExecutionEvent>>;
+}

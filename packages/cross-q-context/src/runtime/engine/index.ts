@@ -132,4 +132,6 @@ export type {
   CookieJarMutation,
   ScriptMessageError,
   ScriptExecutionResult,
+  SandboxExecutionEvent,
+  Sandbox,
 } from './host-types.js';
