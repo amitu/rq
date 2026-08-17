@@ -151,3 +151,42 @@ fn secrets_from_the_environment_never_reach_the_screen() {
     assert!(!text.contains("hunter2"), "{text}");
     assert!(text.contains("Authorization"), "{text}");
 }
+
+// --- links: a view is a page, not a report ------------------------------------------------
+
+#[test]
+fn a_view_offers_numbered_links_and_follow_walks_them() {
+    let f = Fixture::new();
+
+    // `issues` links each row to `issue?number=N`; following one lands on that issue.
+    let listed = run(&f, "issues");
+    assert!(listed.contains("[1]"), "no links were numbered:\n{listed}");
+
+    let out = f.rq(&["r", "issues", "-e", "local", "--follow", "1"]);
+    let text = stdout(&out);
+    assert!(out.status.success(), "{text}{}", stderr(&out));
+    assert!(text.contains("follow →"), "{text}");
+    // The second page is a different request, run with the link's own variable.
+    assert!(text.contains("Issue 1287"), "{text}");
+}
+
+#[test]
+fn following_a_link_that_isnt_there_says_what_is() {
+    let f = Fixture::new();
+    let out = f.rq(&["r", "issues", "-e", "local", "--follow", "99"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("no link [99]"), "{}", stderr(&out));
+}
+
+// --- the project-wide collection ----------------------------------------------------------
+
+#[test]
+fn the_root_collection_reaches_every_request() {
+    let f = Fixture::new();
+    // examples/testbed/apis/__collection.md sets these, and `echo` mirrors what arrived.
+    let echoed = run(&f, "echo");
+    assert!(
+        echoed.contains("rq-testbed-example"),
+        "the root collection's User-Agent never went out:\n{echoed}"
+    );
+}

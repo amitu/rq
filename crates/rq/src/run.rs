@@ -79,6 +79,14 @@ pub struct Run {
 }
 
 impl Run {
+    /// The links the rendered view offers — what `--follow` and the console navigate by.
+    pub fn links(&self) -> Vec<crate::render::Link> {
+        self.view
+            .as_deref()
+            .map(|view| crate::render::markdown(view).links)
+            .unwrap_or_default()
+    }
+
     pub fn target(&self) -> &Step {
         self.steps.last().expect("a run always has a final step")
     }
@@ -324,7 +332,7 @@ pub fn run(
         }
 
         let is_target = idx == target;
-        let step = Step {
+        let mut step = Step {
             rel: entry.rel.clone(),
             name: entry.name.clone(),
             method: prepared.method.clone(),
@@ -341,7 +349,25 @@ pub fn run(
 
         if is_target {
             let view = match doc.section("view").filter(|s| !s.trim().is_empty()) {
-                Some(tpl) if !step.skipped() => Some(render::render_view(tpl, &ctx)?),
+                Some(tpl) if !step.skipped() => match render::render_view(tpl, &ctx) {
+                    Ok(rendered) => Some(rendered),
+                    // A view is written for the shape a *successful* response has. When the
+                    // request failed, the template failing too is a consequence, not the
+                    // story — say what actually went wrong and show the body, rather than
+                    // reporting an undefined field and hiding the 401 that caused it.
+                    Err(e) if !step.response.as_ref().is_some_and(|r| r.ok()) => {
+                        step.notes.push(format!(
+                            "the -- view -- was not rendered because the response was {}: {}",
+                            step.response
+                                .as_ref()
+                                .map(|r| r.status.to_string())
+                                .unwrap_or_else(|| "missing".into()),
+                            e
+                        ));
+                        None
+                    }
+                    Err(e) => return Err(e),
+                },
                 _ => None,
             };
             let raw = match &step.response {
@@ -475,12 +501,29 @@ fn section(doc: &Document, name: &str) -> Option<String> {
 impl Inherited {
     fn gather(project: &Project, idx: usize, notes: &mut Vec<String>) -> Result<Inherited> {
         let mut out = Inherited::default();
+
+        // The project-wide collection first: it is the outermost thing there is.
+        let root = project
+            .root_collection()?
+            .map(|(doc, notes)| (String::from("apis"), doc, notes));
+        let ancestors = project.ancestors(idx).into_iter().map(|anc| {
+            let rel = project.entries[anc].rel.clone();
+            (anc, rel)
+        });
+
         // Outermost first, so a nearer collection's header overwrites a farther one's.
-        for anc in project.ancestors(idx) {
-            let Some((doc, doc_notes)) = project.load_collection(anc)? else {
-                continue;
-            };
-            let rel = &project.entries[anc].rel;
+        for (doc, doc_notes, rel) in root
+            .into_iter()
+            .map(|(rel, doc, notes)| (doc, notes, rel))
+            .chain(ancestors.filter_map(|(anc, rel)| {
+                project
+                    .load_collection(anc)
+                    .ok()
+                    .flatten()
+                    .map(|(doc, notes)| (doc, notes, rel))
+            }))
+        {
+            let rel = &rel;
             notes.extend(doc_notes.into_iter().map(|n| format!("{rel}: {n}")));
             for (k, v) in &doc.front.headers {
                 out.headers.retain(|(ek, _)| !ek.eq_ignore_ascii_case(k));
@@ -566,7 +609,7 @@ pub fn prepare(
 
     for m in &missing {
         notes.push(format!(
-            "`{{{{{m}}}}}` is unresolved and was sent as written"
+            "`{{{{{m}}}}}` has no value; it was left as written"
         ));
     }
 
@@ -602,11 +645,20 @@ fn apply_auth(
     match auth {
         AuthSpec::None | AuthSpec::Inherit => {}
         AuthSpec::Basic { username, password } => {
-            let token = base64(format!("{}:{}", sub(username), sub(password)).as_bytes());
-            set_header("Authorization", format!("Basic {token}"));
+            let (username, password) = (sub(username), sub(password));
+            if usable(&username) || usable(&password) {
+                let token = base64(format!("{username}:{password}").as_bytes());
+                set_header("Authorization", format!("Basic {token}"));
+            } else {
+                notes.push(unset("basic", "username and password"));
+            }
         }
         AuthSpec::Bearer { token, prefix } => {
             let token = sub(token);
+            if !usable(&token) {
+                notes.push(unset("bearer", "token"));
+                return;
+            }
             let value = match prefix {
                 Some(p) if !p.is_empty() => format!("{} {token}", sub(p)),
                 _ => token,
@@ -619,6 +671,10 @@ fn apply_auth(
             in_query,
         } => {
             let (key, value) = (sub(key), sub(value));
+            if !usable(&value) {
+                notes.push(unset("api_key", "value"));
+                return;
+            }
             if *in_query {
                 query.push((key, value));
             } else {
@@ -629,6 +685,18 @@ fn apply_auth(
             "auth `{kind}` was not applied: this build can send basic, bearer and api_key"
         )),
     }
+}
+
+/// Is this credential worth sending? An empty one is not, and neither is one that is still
+/// a `{{template}}` — a collection can declare `Bearer {{GH_TOKEN}}` for everyone and stay
+/// usable by someone who hasn't set a token, instead of turning every public request into
+/// a 401.
+fn usable(credential: &str) -> bool {
+    !credential.trim().is_empty() && !credential.contains("{{")
+}
+
+fn unset(kind: &str, what: &str) -> String {
+    format!("auth `{kind}` was not sent: its {what} resolved to nothing")
 }
 
 /// Assemble the body from whichever of the four sources the file uses. Using two is an
@@ -965,6 +1033,31 @@ fn absorb(
         None => {}
     }
     false
+}
+
+/// Follow a link out of a finished run: resolve `name?a=b` against the project and run it,
+/// with the link's own variables layered on top of the ones the run already had.
+///
+/// A link is navigation, not a new session — the environment, the CLI variables and the
+/// engine all carry over, so following `[#1287](rq:issue?number=1287)` differs from the
+/// page you were on by exactly the thing the link said.
+pub fn follow(
+    project: &Project,
+    link: &crate::render::Link,
+    opts: &RunOptions,
+    engine: &dyn ScriptEngine,
+) -> Result<Run> {
+    let (name, vars) = crate::render::parse_target(&link.target);
+    let target = project
+        .resolve(&name)
+        .with_context(|| format!("link [{}] → {}", link.number, link.target))?;
+
+    let mut opts = opts.clone();
+    for (key, value) in vars {
+        opts.cli_vars.retain(|(k, _)| *k != key);
+        opts.cli_vars.push((key, value));
+    }
+    run(project, target, &opts, engine)
 }
 
 /// A starter document for `rq init`-style creation.

@@ -128,6 +128,11 @@ struct RunArgs {
     /// Open the run in the console: arrow between steps, drill into each one.
     #[arg(long, short = 'c')]
     console: bool,
+
+    /// Follow a numbered link from the rendered view, then show that. Repeatable, so
+    /// `--follow 2 --follow 1` walks two pages in.
+    #[arg(long, value_name = "N")]
+    follow: Vec<usize>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -242,25 +247,10 @@ fn open(cli: &Cli, cwd: &Path) -> Result<Project> {
 // rq r
 // ---------------------------------------------------------------------------------------
 
-fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
-    let target = project.resolve(&args.name)?;
-    let mut cli_vars = Vec::new();
-    for raw in &args.vars {
-        cli_vars.push(vars::parse_assignment(raw)?);
-    }
-
-    let opts = RunOptions {
-        cli_vars,
-        environment: args.environment.clone(),
-        prompt: args.prompt,
-        interactive: vars::stdin_is_interactive(),
-        strict: args.strict,
-        script_timeout_ms: args.script_timeout,
-    };
-
-    // The engine this build hosts. Swapping in a real one is this line.
-    let engine = script::NoEngine;
-    let outcome = run::run(project, target, &opts, &engine)?;
+/// Everything one run puts on screen: the step tree, whatever `--show` asked for, and
+/// the rendered view. Following a link prints the next page with the same function, so
+/// page two looks exactly like page one.
+fn print_run(outcome: &run::Run, args: &RunArgs) {
     let show = |what: Show| args.show.contains(&what) || args.show.contains(&Show::All);
     let secrets = &outcome.secrets;
 
@@ -382,6 +372,51 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         for note in &step.notes {
             ui::note(&format!("{}: {note}", step.rel));
         }
+    }
+}
+
+fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
+    let target = project.resolve(&args.name)?;
+    let mut cli_vars = Vec::new();
+    for raw in &args.vars {
+        cli_vars.push(vars::parse_assignment(raw)?);
+    }
+
+    let opts = RunOptions {
+        cli_vars,
+        environment: args.environment.clone(),
+        prompt: args.prompt,
+        interactive: vars::stdin_is_interactive(),
+        strict: args.strict,
+        script_timeout_ms: args.script_timeout,
+    };
+
+    // The engine this build hosts. Swapping in a real one is this line.
+    let engine = script::NoEngine;
+    let outcome = run::run(project, target, &opts, &engine)?;
+    print_run(&outcome, args);
+
+    // Link following: each hop replaces what is on screen, the way clicking does.
+    let mut outcome = outcome;
+    for number in &args.follow {
+        let links = outcome.links();
+        let Some(link) = links.iter().find(|l| l.number == *number) else {
+            bail!(
+                "no link [{number}] in that view{}",
+                if links.is_empty() {
+                    " (it offers none)".to_string()
+                } else {
+                    format!(" — it offers 1..{}", links.len())
+                }
+            );
+        };
+        println!(
+            "\n{} {}",
+            ui::dim("follow →"),
+            ui::bold(&format!("{} ({})", link.label.trim(), link.target))
+        );
+        outcome = run::follow(project, link, &opts, &engine)?;
+        print_run(&outcome, args);
     }
 
     if args.console {

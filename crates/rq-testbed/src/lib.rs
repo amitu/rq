@@ -150,7 +150,9 @@ pub fn route(req: &Request) -> Reply {
         // --- something worth rendering --------------------------------------------------
         ("GET", ["issues"]) => issues(req),
         ("GET", ["issues", number]) => match number.parse::<u32>() {
-            Ok(n) if n < 100 => Reply::json(
+            // Anything the list actually offers — the list starts at #1287, and a detail
+            // page that 404s on the rows above it is a trap for the first person to click.
+            Ok(n) if n > 0 => Reply::json(
                 200,
                 json!({ "number": n, "title": format!("Issue {n}"), "state": "open" }),
             ),
@@ -685,7 +687,7 @@ mod tests {
         assert_eq!(get("/redirect/2").status, 302);
         assert_eq!(get("/redirect/0").status, 200);
         assert_eq!(get("/issues/1").status, 200);
-        assert_eq!(get("/issues/500").status, 404);
+        assert_eq!(get("/issues/0").status, 404);
         assert_eq!(get("/nope").status, 404);
         assert_eq!(get("/bytes?n=32").body.len(), 32);
     }
