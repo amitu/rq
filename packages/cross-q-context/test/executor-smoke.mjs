@@ -28,6 +28,8 @@ import {
   createTimerBridges,
   AsyncRegistry,
   SANDBOX_DEFAULT_TIMEOUT_MS,
+  inflateMutations,
+  createInMemoryCookieJarBridge,
 } from '../dist/runtime/engine/index.js';
 
 let passed = 0;
@@ -126,7 +128,31 @@ try {
   assert.equal(typeof SANDBOX_DEFAULT_TIMEOUT_MS, 'number', 'SANDBOX_DEFAULT_TIMEOUT_MS is a number');
   ok('constants importable');
 
-  console.log(`\nExecutor smoke OK — ${passed} checks. Isolate primitives + guest realm + capability bridges run in QuickJS from cross-q-context.`);
+  // 7. inflateMutations turns the guest's RAW mutations into a persist-ready MutationDiff with full
+  //    VariableData (ADR-053 Layer 2). New variable → createDefaultVariableData; type is inferred.
+  const emptyScopes = { global: {}, environment: {}, variables: {}, collectionVariables: {}, iterationData: {}, secrets: {} };
+  const context = { ...emptyScopes, request: {}, response: null, info: { collectionId: null }, hostAllowlist: [] };
+  const raw = { environment: { token: { value: 'abc', type: 'string' } }, global: { count: { value: '5', type: 'number' } } };
+  const diff = inflateMutations(raw, context);
+  assert.equal(diff.environment.token.localValue, 'abc', 'inflated new env var localValue');
+  assert.equal(diff.environment.token.type, 'string', 'inflated env var type inferred');
+  assert.ok(typeof diff.environment.token.id === 'string', 'inflated var gets an id');
+  assert.equal(diff.global.count.type, 'number', 'inflated global var type inferred');
+  ok('inflateMutations builds a persist-ready MutationDiff');
+
+  // 8. The in-memory cookie jar bridge: seed → list → upsert → drained mutation log.
+  const jar = createInMemoryCookieJarBridge([
+    { host: 'example.com', cookies: [{ name: 'sid', value: 'v1', domain: 'example.com', path: '/', secure: true, httpOnly: true, expiry: { type: 'session' } }] },
+  ]);
+  const seeded = jar.bridge.list('example.com');
+  assert.equal(seeded.length, 1, 'seeded cookie is listed');
+  assert.equal(seeded[0].name, 'sid', 'seeded cookie name');
+  jar.bridge.upsert('example.com', { name: 'tok', value: 'v2', domain: 'example.com', path: '/', secure: false, httpOnly: false, expiry: { type: 'session' } });
+  const drained = jar.drainMutations();
+  assert.ok(drained.some((m) => m.kind === 'upsert' && m.cookie.name === 'tok'), 'upsert recorded in mutation log');
+  ok('in-memory cookie jar seeds, lists, and records mutations');
+
+  console.log(`\nExecutor smoke OK — ${passed} checks. Primitives + guest realm + bridges + host result-processing run in QuickJS from cross-q-context.`);
 } finally {
   ctx.dispose();
 }

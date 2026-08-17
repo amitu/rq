@@ -148,16 +148,28 @@ export interface ScriptMessageInput {
     readonly data: string;
     readonly timestamp: number;
 }
-/** The variable value type. `string` (not a literal union) so the app's nominal `VariableDataType`
- * enum — string/number/boolean/secret/array — assigns at the seam; consumers switch on the value. */
-export type VariableDataType = string;
-/** A resolved variable at the runtime boundary (the app's `VariableData`). */
+/** A variable's value type. Canonical enum (matches the app's) — the executor compares against
+ * `secret` and maps raw mutation types onto these members. */
+export declare enum VariableDataType {
+    string = "string",
+    number = "number",
+    boolean = "boolean",
+    secret = "secret",
+    array = "array"
+}
+/** A resolved variable at the runtime boundary (the canonical `VariableData` shape the executor
+ * inflates to — id/timestamps/rank carried so a host can persist it directly). */
 export interface VariableData {
-    localValue: string;
-    syncValue: string;
-    type: VariableDataType;
     id?: string;
-    isPersisted?: boolean;
+    syncValue: string;
+    localValue: string;
+    type: VariableDataType;
     isEnabled?: boolean;
+    isPersisted?: boolean;
+    rank?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+    createdBy?: string | null;
+    updatedBy?: string | null;
 }
 export type EnvironmentVariables = Record<string, VariableData>;

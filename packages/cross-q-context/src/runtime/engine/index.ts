@@ -51,3 +51,33 @@ export {
   UserScriptError,
   WRAPPER_LINE_OFFSET,
 } from './script-error-location.js';
+
+// Host-side result processing (ADR-053 Layer 2 + ADR-105 cookies + ADR-208 on-message batching).
+export { inflateMutations } from './inflate-mutations.js';
+export { createDefaultVariableData, toVariableDataType } from './variable-data.js';
+export type { RawMutationType } from './variable-data.js';
+export { createInMemoryCookieJarBridge } from './cookies.js';
+export type { CookieJarBridgeHandle } from './cookies.js';
+export {
+  ON_MESSAGE_TIMEOUT_ERROR,
+  stampMessageIndex,
+  createBatchOutcome,
+  buildBatchResult,
+} from './on-message-batch.js';
+export type { BatchOutcome } from './on-message-batch.js';
+
+// The host-side result type layer (inflated mutations, cookie family, rich result).
+export type {
+  MutationVariables,
+  CollectionMutation,
+  MutationDiff,
+  TestResult,
+  TestResultStatus,
+  ScriptCookieSnapshot,
+  ScriptCookie,
+  CookieJarBridge,
+  CookieJarSeed,
+  CookieJarMutation,
+  ScriptMessageError,
+  ScriptExecutionResult,
+} from './host-types.js';

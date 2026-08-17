@@ -8,8 +8,8 @@
  * `result` event; the runtime replays it against the app-scoped
  * `CookieRepository` via `RuntimeConfig.onCookieJarMutation`.
  */
-import type { CookieJarBridge } from '../index.js';
-import type { CookieJarMutation, CookieJarSeed } from '../index.js';
+import type { CookieJarBridge } from './host-types.js';
+import type { CookieJarMutation, CookieJarSeed } from './host-types.js';
 /**
  * Bridge handle with drain. Returned to `node-sandbox.runScript` so it can
  * drain the mutation log after the script completes and include it in the

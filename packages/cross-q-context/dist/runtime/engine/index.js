@@ -33,3 +33,8 @@ export { createTimerBridges } from './isolated/bridges/timer-bridge.js';
 export { AsyncRegistry } from './async-registry.js';
 export { SANDBOX_DEFAULT_TIMEOUT_MS } from './constants.js';
 export { scriptFilenameForPhase, parseScriptErrorLocation, countScriptLines, UserScriptError, WRAPPER_LINE_OFFSET, } from './script-error-location.js';
+// Host-side result processing (ADR-053 Layer 2 + ADR-105 cookies + ADR-208 on-message batching).
+export { inflateMutations } from './inflate-mutations.js';
+export { createDefaultVariableData, toVariableDataType } from './variable-data.js';
+export { createInMemoryCookieJarBridge } from './cookies.js';
+export { ON_MESSAGE_TIMEOUT_ERROR, stampMessageIndex, createBatchOutcome, buildBatchResult, } from './on-message-batch.js';
