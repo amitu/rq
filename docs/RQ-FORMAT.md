@@ -344,13 +344,19 @@ Named so you don't have to discover it:
 - **Scripts** (`-- pre --` / `-- post --`) parse and round-trip, but do not execute — the
   host side is built and tested (§6), the engine is not here yet.
 - **`-- form --`** is reserved; nothing reads it.
-- **Post-run navigation** (the DevTools-style panel) — `--show request|headers|timing|vars`
-  prints the same information non-interactively today.
-- **Per-phase timings** (DNS / TCP / TLS / waiting) — only total elapsed time is measured.
+- **The interactive project browser** — bare `rq` prints the tree; it doesn't yet let you
+  arrow around it, run, or edit from there. (The *post-run* console is real: `rq r x -c`.)
 - **Terminal-width-aware tables** — columns are aligned to their content, so a table with
   very long cells is wider than an 80-column window and wraps. Nothing is truncated;
   narrow the column in the template (`{{ i.title | truncate(60) }}`) if you want it short.
 - **Saved response examples** and data-driven iteration.
 - Protocols other than HTTP. GraphQL imports as a JSON POST body.
+
+**Timing, precisely.** `--show timing` and the console's timing pane break a request into
+DNS, TCP, waiting and download — measured inside the HTTP stack, not estimated. The **TLS
+handshake falls inside `waiting`**, because ureq completes it lazily on first use rather
+than during connect. That was measured rather than assumed: against one host, an `https`
+request reports a *smaller* TCP phase than plain `http` and a correspondingly larger wait.
+A "TCP+TLS" figure would have looked better and told you less.
 
 Everything in §§1–8 is real, tested, and on the wire.

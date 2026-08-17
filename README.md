@@ -91,7 +91,12 @@ rq curl --save-as issues 'curl -H "Accept: application/vnd.github+json" \
 rq r issues        # run it — anytime, from anywhere in the project
 rq e issues        # open it in $EDITOR
 rq l               # the tree: every request, its method, what it depends on
+rq r me -c         # the console: arrow between the steps of a run, drill into each
 ```
+
+The console is the browser network panel for your terminal — every step of the run, its
+request, its response, its headers, and where the milliseconds actually went — over the run
+you already did. Nothing is re-sent, and there is no second `--verbose` pass.
 
 Each request is **one Markdown file** — frontmatter plus `-- description --`,
 `-- view --`, `-- body --`, `-- pre --`, `-- post --` sections. The `-- view --` template

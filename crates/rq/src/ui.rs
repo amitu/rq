@@ -140,6 +140,18 @@ pub fn warn_sign() -> &'static str {
     "!"
 }
 
+/// `https://api.github.com/repos/x/y/issues` → `.../repos/x/y/issues`, the way a network
+/// panel abbreviates it.
+pub fn short_url(url: &str) -> String {
+    match url.split_once("://") {
+        Some((_, rest)) => match rest.find('/') {
+            Some(i) if rest.len() > 1 => format!("...{}", &rest[i..]),
+            _ => url.to_string(),
+        },
+        None => url.to_string(),
+    }
+}
+
 /// Print a non-fatal note to stderr, so piping stdout stays clean.
 pub fn note(msg: &str) {
     eprintln!("{} {}", yellow(warn_sign()), dim(msg));

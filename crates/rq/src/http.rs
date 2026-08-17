@@ -1,7 +1,13 @@
 //! Building and sending one request. Blocking, one at a time, no runtime — `rq r` is a
 //! shell command, not a server.
 
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::{
+    ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+};
 
 use anyhow::{bail, Context, Result};
 
@@ -40,6 +46,29 @@ pub enum Payload {
 }
 
 impl Payload {
+    /// The body as text, when showing it is useful. A file's contents are not: they are
+    /// bytes meant for the wire, and pouring them into a pane helps nobody.
+    pub fn preview(&self) -> Option<String> {
+        match self {
+            Payload::Text { text, .. } => Some(text.clone()),
+            Payload::Form(fields) => Some(
+                fields
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join("&"),
+            ),
+            Payload::Multipart(fields) => Some(
+                fields
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {v}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            Payload::File { .. } => None,
+        }
+    }
+
     pub fn describe(&self) -> String {
         match self {
             Payload::Text { media_type, text } => format!("{media_type} ({} bytes)", text.len()),
@@ -47,6 +76,100 @@ impl Payload {
             Payload::Multipart(f) => format!("multipart/form-data ({} parts)", f.len()),
             Payload::File { path, .. } => format!("file {path}"),
         }
+    }
+}
+
+/// Where a request's wall clock went. Measured, not estimated: DNS and the socket connect
+/// are timed inside ureq's own resolver and connector, `waiting` is what remained before the
+/// response head arrived, and `download` is the body read.
+///
+/// **The TLS handshake lands in `waiting`, not `tcp`.** ureq's TLS transport completes the
+/// handshake lazily on first use rather than inside `connect()` — measured, not assumed:
+/// against the same host, an `https` request reports a *smaller* `tcp` than plain `http` and
+/// a correspondingly larger `waiting`. Reporting a "TCP+TLS" number would be a prettier
+/// figure that meant less, so `waiting` is "TLS handshake, request write, and the server's
+/// own think time" and says so. Redirects accumulate into the same buckets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Timings {
+    pub dns: Duration,
+    /// The socket connect. Not the TLS handshake — see the note above.
+    pub tcp: Duration,
+    pub waiting: Duration,
+    pub download: Duration,
+    pub total: Duration,
+}
+
+impl Timings {
+    /// The phases in display order, skipping any that measured nothing.
+    pub fn phases(&self) -> Vec<(&'static str, Duration)> {
+        [
+            ("DNS", self.dns),
+            ("TCP", self.tcp),
+            ("waiting", self.waiting),
+            ("download", self.download),
+        ]
+        .into_iter()
+        .filter(|(_, d)| !d.is_zero())
+        .collect()
+    }
+}
+
+#[derive(Debug, Default)]
+struct Marks {
+    dns: Duration,
+    tcp: Duration,
+}
+
+/// Times name resolution by wrapping ureq's own resolver rather than reimplementing it.
+struct TimingResolver {
+    inner: DefaultResolver,
+    marks: Arc<Mutex<Marks>>,
+}
+
+impl std::fmt::Debug for TimingResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TimingResolver")
+    }
+}
+
+impl Resolver for TimingResolver {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let started = Instant::now();
+        let out = self.inner.resolve(uri, config, timeout);
+        self.marks.lock().unwrap().dns += started.elapsed();
+        out
+    }
+}
+
+/// Times the connect + TLS handshake the same way.
+struct TimingConnector {
+    inner: DefaultConnector,
+    marks: Arc<Mutex<Marks>>,
+}
+
+impl std::fmt::Debug for TimingConnector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TimingConnector")
+    }
+}
+
+impl Connector<()> for TimingConnector {
+    type Out = Box<dyn Transport>;
+
+    fn connect(
+        &self,
+        details: &ConnectionDetails,
+        chained: Option<()>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        let started = Instant::now();
+        let out = self.inner.connect(details, chained);
+        self.marks.lock().unwrap().tcp += started.elapsed();
+        out
     }
 }
 
@@ -58,6 +181,7 @@ pub struct Response {
     pub body: String,
     pub bytes: usize,
     pub elapsed: Duration,
+    pub timings: Timings,
     /// The URL the response actually came from, after any redirects.
     pub final_url: String,
 }
@@ -107,7 +231,20 @@ pub fn send(req: &Prepared) -> Result<Response> {
                 .build(),
         );
     }
-    let agent = ureq::Agent::new_with_config(builder.build());
+    // A fresh agent per request means an empty connection pool, so the phases below are
+    // this request's own and not a pooled connection's history.
+    let marks = Arc::new(Mutex::new(Marks::default()));
+    let agent = ureq::Agent::with_parts(
+        builder.build(),
+        TimingConnector {
+            inner: DefaultConnector::new(),
+            marks: Arc::clone(&marks),
+        },
+        TimingResolver {
+            inner: DefaultResolver::default(),
+            marks: Arc::clone(&marks),
+        },
+    );
 
     let method = req.method.to_ascii_uppercase();
     let target = req.full_url();
@@ -127,6 +264,7 @@ pub fn send(req: &Prepared) -> Result<Response> {
 
     let started = Instant::now();
     let mut resp = agent.run(http_req).map_err(|e| explain(e, &target))?;
+    let head_at = started.elapsed();
     let status = resp.status();
     let headers: Vec<(String, String)> = resp
         .headers()
@@ -151,6 +289,16 @@ pub fn send(req: &Prepared) -> Result<Response> {
         .read_to_string()
         .unwrap_or_else(|e| format!("<body could not be read as text: {e}>"));
     let elapsed = started.elapsed();
+    let marks = marks.lock().unwrap();
+    let timings = Timings {
+        dns: marks.dns,
+        tcp: marks.tcp,
+        // Whatever was left before the response head arrived: the TLS handshake, the
+        // request write, and the server's own think time.
+        waiting: head_at.saturating_sub(marks.dns + marks.tcp),
+        download: elapsed.saturating_sub(head_at),
+        total: elapsed,
+    };
 
     Ok(Response {
         status: status.as_u16(),
@@ -159,6 +307,7 @@ pub fn send(req: &Prepared) -> Result<Response> {
         bytes: text.len(),
         body: text,
         elapsed,
+        timings,
         final_url,
     })
 }
