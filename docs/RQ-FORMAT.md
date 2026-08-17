@@ -188,7 +188,7 @@ the file. A markdown rule (`---`) or an em-dash sentence is never mistaken for o
 
 | Section | What it is |
 |---|---|
-| `-- description --` | Free markdown, for your future self. |
+| `-- description --` | Free markdown, for your future self. Its **first line** is the request's name in words — what `rq l`, the project list and a form's title show. |
 | `-- view --` | The response render template (§7). |
 | `-- body --` | The request body — raw text, JSON, XML, GraphQL. |
 | `-- pre --` | JavaScript to run before the request. **Not executed by this build.** |

@@ -4,6 +4,10 @@ vars:
   handle: { prompt: "Whose posts?", required: true }
 ---
 
+-- description --
+
+Someone's posts.
+
 -- view --
 
 # @{{ response.handle }}

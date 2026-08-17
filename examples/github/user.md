@@ -4,6 +4,10 @@ vars:
   login: { default: '{{owner}}', prompt: "GitHub username" }
 ---
 
+-- description --
+
+Anyone's public profile.
+
 -- view --
 
 # {{ response.name or response.login }} (@{{ response.login }})

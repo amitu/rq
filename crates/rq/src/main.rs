@@ -187,6 +187,7 @@ enum EnvCommand {
 }
 
 fn main() {
+    restore_sigpipe();
     let cli = Cli::parse();
     ui::init(match cli.color {
         Color::Auto => ColorChoice::Auto,
@@ -201,6 +202,19 @@ fn main() {
             eprintln!("{} {e:#}", ui::red("error:"));
             std::process::exit(2);
         }
+    }
+}
+
+/// Die quietly when the reader goes away, the way `cat` and `ls` do.
+///
+/// Rust ignores `SIGPIPE`, so a write to a closed pipe returns `EPIPE` and `println!`
+/// *panics* — which means `rq l | head` printed a backtrace at you. Restoring the default
+/// handler makes the process end where the pipe ended.
+fn restore_sigpipe() {
+    #[cfg(unix)]
+    // SAFETY: setting a signal disposition to the OS default before any threads exist.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 }
 
@@ -566,7 +580,7 @@ fn print_children(
             }
             Kind::Request => {
                 *requests += 1;
-                let (method, path, parents) = match project.load(*idx) {
+                let (method, path, parents, summary) = match project.load(*idx) {
                     Ok((doc, _)) => (
                         doc.front.method.clone().unwrap_or_else(|| "GET".into()),
                         doc.front
@@ -575,8 +589,14 @@ fn print_children(
                             .map(|u| ui::short_url(&u))
                             .unwrap_or_default(),
                         doc.front.parents.clone(),
+                        doc.summary(),
                     ),
-                    Err(_) => ("?".into(), ui::red("unreadable").to_string(), Vec::new()),
+                    Err(_) => (
+                        "?".into(),
+                        ui::red("unreadable").to_string(),
+                        Vec::new(),
+                        None,
+                    ),
                 };
                 let arrows = if parents.is_empty() {
                     String::new()
@@ -590,6 +610,12 @@ fn print_children(
                     ui::dim(&path),
                     arrows,
                 );
+                // What the request says it is, under it — the URL says where it goes, which
+                // is not the same question.
+                if let Some(summary) = summary {
+                    let gutter = if last { "   " } else { ui::pipe() };
+                    println!("{indent}{gutter} {:<width$}  {}", "", ui::dim(&summary));
+                }
             }
         }
     }

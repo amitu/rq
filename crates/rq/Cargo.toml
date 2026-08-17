@@ -31,6 +31,9 @@ rpassword = "7"
 # Raw mode and key events for the post-run console. Drawing is ours — a layout library
 # would be a large dependency for panes this plain.
 crossterm = "0.29"
+# Only to restore the default SIGPIPE handler — see `main`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 # curl parsing + collection import, through the Idealised Model.
 rq-doc = { path = "../rq-doc" }
 cross-q = { path = "../cross-q" }

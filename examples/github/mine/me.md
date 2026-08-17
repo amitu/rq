@@ -2,6 +2,10 @@
 url: '{{api}}/user'
 ---
 
+-- description --
+
+You, according to your token.
+
 -- view --
 
 # {{ response.name or response.login }} (@{{ response.login }})

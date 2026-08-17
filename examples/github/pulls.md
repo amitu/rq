@@ -8,6 +8,10 @@ vars:
   per_page: 10
 ---
 
+-- description --
+
+Open pull requests. Every row opens one.
+
 -- view --
 
 # {{ response | length }} {{ vars.state }} pull requests

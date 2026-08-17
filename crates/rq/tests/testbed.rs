@@ -514,3 +514,16 @@ fn a_project_browser_starts_with_no_page_at_all() {
     let page = console.frame().join("\n");
     assert!(page.contains("Timeline ·"), "{page}");
 }
+
+#[test]
+fn the_list_says_what_each_request_is() {
+    use crossterm::event::KeyCode;
+    let app = App::new();
+    let mut console = app.open("timeline");
+    press(&mut console, KeyCode::Char('l'));
+    let listing = console.frame().join("\n");
+
+    // `timeline`'s description opens "The home page." — far more use than a templated URL.
+    assert!(listing.contains("The home page"), "{listing}");
+    assert!(listing.contains("Write a post"), "{listing}");
+}
