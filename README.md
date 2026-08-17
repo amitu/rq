@@ -106,7 +106,10 @@ brings a collection in, and `cq convert ./my-apis --to bruno` takes it anywhere 
 
 Full spec: [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md). Scripts (`-- pre --` / `-- post --`)
 are parsed and round-tripped but **not yet executed** — every run that has one says so, and
-`--strict` fails on it. That runtime is `cross-q-context`, landing next.
+`--strict` fails on it. `rq` *hosts* the engine rather than implementing it: the header
+mutations, variable writes, test results, execution directives and cookie-jar seeding a
+script produces are already wired through the run and covered by tests against a stub
+engine, so `cross-q-context` drops into one trait when it ships.
 
 ## Docs
 

@@ -12,6 +12,7 @@ use rq::import;
 use rq::project::{self, Kind, Project};
 use rq::render;
 use rq::run::{self, RunOptions};
+use rq::script::{self, TestStatus};
 use rq::ui::{self, ColorChoice};
 use rq::vars;
 
@@ -118,6 +119,10 @@ struct RunArgs {
     /// Treat any note (unresolved variable, unrun script) as an error.
     #[arg(long)]
     strict: bool,
+
+    /// Wall clock for each script, in milliseconds.
+    #[arg(long, value_name = "MS")]
+    script_timeout: Option<u64>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -245,9 +250,12 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         prompt: args.prompt,
         interactive: vars::stdin_is_interactive(),
         strict: args.strict,
+        script_timeout_ms: args.script_timeout,
     };
 
-    let outcome = run::run(project, target, &opts)?;
+    // The engine this build hosts. Swapping in a real one is this line.
+    let engine = script::NoEngine;
+    let outcome = run::run(project, target, &opts, &engine)?;
     let show = |what: Show| args.show.contains(&what) || args.show.contains(&Show::All);
     let secrets = &outcome.secrets;
 
@@ -258,17 +266,43 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         } else {
             format!("{}{}", "  ".repeat(i - 1), ui::branch())
         };
+        let outcome_cell = match &step.response {
+            Some(r) => format!(
+                "{}  {}",
+                ui::status(
+                    r.status,
+                    format!("{} {}", r.status, r.status_text).trim_end()
+                ),
+                ui::dim(&format!("{}ms", r.elapsed.as_millis()))
+            ),
+            None => ui::dim("skipped"),
+        };
         println!(
-            "{lead} {}  {} {}  {}  {}",
+            "{lead} {}  {} {}  {outcome_cell}",
             ui::bold(&step.name),
             step.method,
             ui::dim(&short_url(&step.url)),
-            ui::status(
-                step.response.status,
-                format!("{} {}", step.response.status, step.response.status_text).trim_end()
-            ),
-            ui::dim(&format!("{}ms", step.response.elapsed.as_millis()))
         );
+        for log in &step.logs {
+            println!(
+                "     {} {}",
+                ui::dim(&format!("{}:", log.level)),
+                ui::redact(&log.message(), secrets)
+            );
+        }
+        for test in &step.tests {
+            let (mark, name) = match test.status {
+                TestStatus::Passed => (ui::green(ui::tick()), test.name.clone()),
+                TestStatus::Failed => (ui::red("✗"), ui::bold(&test.name)),
+                TestStatus::Skipped => (ui::dim("-"), ui::dim(&test.name)),
+            };
+            let detail = test
+                .error
+                .as_deref()
+                .map(|e| ui::dim(&format!(" — {e}")))
+                .unwrap_or_default();
+            println!("     {mark} {name}{detail}");
+        }
         for (key, value) in &step.captured {
             let shown = if secrets.iter().any(|s| s == value) {
                 "***".to_string()
@@ -293,7 +327,7 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
     }
     if show(Show::Headers) {
         println!("\n{}", ui::dim("── response headers ────────────────────"));
-        for (k, v) in &target_step.response.headers {
+        for (k, v) in target_step.response.iter().flat_map(|r| r.headers.iter()) {
             println!("{k}: {v}");
         }
     }
@@ -311,12 +345,15 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
     if show(Show::Timing) {
         println!("\n{}", ui::dim("── timing ──────────────────────────────"));
         for step in &outcome.steps {
-            println!(
-                "{:<20} {:>6}ms  {} bytes",
-                step.name,
-                step.response.elapsed.as_millis(),
-                step.response.bytes
-            );
+            match &step.response {
+                Some(r) => println!(
+                    "{:<20} {:>6}ms  {} bytes",
+                    step.name,
+                    r.elapsed.as_millis(),
+                    r.bytes
+                ),
+                None => println!("{:<20} {:>8}", step.name, "skipped"),
+            }
         }
     }
 
@@ -338,7 +375,31 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         }
     }
 
-    Ok(if args.fail && outcome.failed() { 1 } else { 0 })
+    let failed_tests = outcome.failed_tests();
+    if outcome.total_tests() > 0 {
+        let summary = format!(
+            "{}/{} test(s) passed",
+            outcome.total_tests() - failed_tests,
+            outcome.total_tests()
+        );
+        println!(
+            "\n{}",
+            if failed_tests == 0 {
+                ui::green(&summary)
+            } else {
+                ui::red(&summary)
+            }
+        );
+    }
+
+    // A failed assertion is a non-zero exit with no flag needed — that is what makes `rq r`
+    // usable as a CI step. A non-2xx response is only an error if you say so with `--fail`,
+    // because a 404 may be exactly what the request was checking for.
+    Ok(if failed_tests > 0 || (args.fail && outcome.failed()) {
+        1
+    } else {
+        0
+    })
 }
 
 /// `https://api.github.com/repos/x/y/issues` → `.../repos/x/y/issues`, the way a network
