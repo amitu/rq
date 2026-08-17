@@ -19,8 +19,10 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
 use crossterm::{cursor, execute, queue};
 
+use crate::project::Project;
 use crate::render;
-use crate::run::{Run, Step};
+use crate::run::{Run, RunOptions, Step};
+use crate::script::ScriptEngine;
 use crate::ui;
 
 /// Which pane is showing for the selected step.
@@ -54,39 +56,119 @@ impl Pane {
     ];
 }
 
-/// The console's state: which step, which pane, how far scrolled.
+/// What the console needs in order to *go somewhere*: the project the links point into,
+/// and the same options and engine the first run used, so page two is the same session as
+/// page one.
+pub struct Nav<'a> {
+    pub project: &'a Project,
+    pub opts: &'a RunOptions,
+    pub engine: &'a dyn ScriptEngine,
+}
+
+/// The console's state: where you've been, which step, which pane, how far scrolled.
 pub struct Console<'a> {
-    run: &'a Run,
+    nav: Option<Nav<'a>>,
+    /// Every page visited, oldest first — following pushes, backspace steps back.
+    history: Vec<Run>,
+    cursor: usize,
     step: usize,
     pane: Pane,
     scroll: usize,
     height: usize,
     width: usize,
+    /// A one-line report of the last thing that happened (or failed to).
+    message: Option<String>,
 }
 
 impl<'a> Console<'a> {
-    pub fn new(run: &'a Run) -> Self {
+    /// A console with no way to navigate — everything renders, links do nothing.
+    pub fn new(run: Run) -> Self {
+        let step = run.steps.len().saturating_sub(1);
         Self {
-            run,
-            step: run.steps.len().saturating_sub(1),
+            nav: None,
+            history: vec![run],
+            cursor: 0,
+            step,
             pane: Pane::View,
             scroll: 0,
             height: 24,
             width: 100,
+            message: None,
         }
     }
 
+    pub fn with_nav(run: Run, nav: Nav<'a>) -> Self {
+        Self {
+            nav: Some(nav),
+            ..Console::new(run)
+        }
+    }
+
+    pub fn run(&self) -> &Run {
+        &self.history[self.cursor]
+    }
+
+    /// The links the current page offers, in reading order.
+    pub fn links(&self) -> Vec<crate::render::Link> {
+        self.run().links()
+    }
+
+    /// Open link `number`, pushing it onto the history. Anything ahead of the cursor is
+    /// dropped — you followed a different way, so the old forward path is gone, exactly as
+    /// a browser does it.
+    pub fn follow(&mut self, number: usize) {
+        let Some(nav) = &self.nav else {
+            self.message = Some("this console has nothing to navigate with".into());
+            return;
+        };
+        let links = self.run().links();
+        let Some(link) = links.iter().find(|l| l.number == number) else {
+            self.message = Some(match links.len() {
+                0 => "this page has no links".to_string(),
+                n => format!("no link [{number}] — this page offers 1..{n}"),
+            });
+            return;
+        };
+
+        match crate::run::follow(nav.project, link, nav.opts, nav.engine) {
+            Ok(next) => {
+                self.history.truncate(self.cursor + 1);
+                self.history.push(next);
+                self.cursor = self.history.len() - 1;
+                self.step = self.run().steps.len().saturating_sub(1);
+                self.pane = Pane::View;
+                self.scroll = 0;
+                self.message = Some(format!("→ {}", link.label.trim()));
+            }
+            // A link that fails is a page that didn't load, not a reason to lose the one
+            // you were reading.
+            Err(e) => self.message = Some(format!("{}: {e:#}", link.label.trim())),
+        }
+    }
+
+    pub fn back(&mut self) {
+        if self.cursor == 0 {
+            self.message = Some("this is the first page".into());
+            return;
+        }
+        self.cursor -= 1;
+        self.step = self.run().steps.len().saturating_sub(1);
+        self.pane = Pane::View;
+        self.scroll = 0;
+        self.message = None;
+    }
+
     fn selected(&self) -> &Step {
-        &self.run.steps[self.step]
+        &self.run().steps[self.step]
     }
 
     /// The lines the current pane shows, already styled.
     pub fn body(&self) -> Vec<String> {
         let step = self.selected();
-        let secrets = &self.run.secrets;
+        let secrets = &self.run().secrets;
         match self.pane {
             Pane::View => {
-                let text = match (&self.run.view, self.step + 1 == self.run.steps.len()) {
+                let text = match (&self.run().view, self.step + 1 == self.run().steps.len()) {
                     // Only the requested step has a rendered view; a parent shows its body.
                     (Some(view), true) => render::markdown_to_terminal(view),
                     _ => match &step.response {
@@ -132,7 +214,7 @@ impl<'a> Console<'a> {
     /// Everything above the body: the step list and the pane tabs.
     pub fn header(&self) -> Vec<String> {
         let mut out = Vec::new();
-        for (i, step) in self.run.steps.iter().enumerate() {
+        for (i, step) in self.run().steps.iter().enumerate() {
             let marker = if i == self.step {
                 ui::cyan(ui::arrow())
             } else {
@@ -175,7 +257,15 @@ impl<'a> Console<'a> {
     }
 
     fn footer(&self) -> String {
-        ui::dim("↑/↓ step · ←/→ pane · j/k scroll · q quit")
+        let keys = if self.nav.is_some() && !self.run().links().is_empty() {
+            "1-9 follow · backspace back · ↑/↓ step · ←/→ pane · j/k scroll · q quit"
+        } else {
+            "↑/↓ step · ←/→ pane · j/k scroll · q quit"
+        };
+        match &self.message {
+            Some(message) => format!("{}  {}", ui::cyan(message), ui::dim(keys)),
+            None => ui::dim(keys),
+        }
     }
 
     /// Apply one keypress. Returns `false` when the console should close.
@@ -189,7 +279,7 @@ impl<'a> Console<'a> {
                 self.scroll = 0;
             }
             KeyCode::Down => {
-                self.step = (self.step + 1).min(self.run.steps.len() - 1);
+                self.step = (self.step + 1).min(self.run().steps.len() - 1);
                 self.scroll = 0;
             }
             KeyCode::Left | KeyCode::BackTab => {
@@ -200,6 +290,11 @@ impl<'a> Console<'a> {
                 self.pane = step_pane(self.pane, 1);
                 self.scroll = 0;
             }
+            // A digit opens that link — the console's whole reason to know about links.
+            KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                self.follow(c.to_digit(10).unwrap_or(0) as usize)
+            }
+            KeyCode::Backspace => self.back(),
             KeyCode::Char('j') => self.scroll += 1,
             KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::PageDown | KeyCode::Char(' ') => self.scroll += page,
@@ -277,12 +372,16 @@ pub fn available() -> bool {
     io::stdout().is_terminal() && io::stdin().is_terminal()
 }
 
-/// Open the console over a finished run and block until the user quits.
-pub fn open(run: &Run) -> Result<()> {
+/// Open the console over a finished run and block until the user quits. With a [`Nav`],
+/// its links are live.
+pub fn open(run: Run, nav: Option<Nav<'_>>) -> Result<()> {
     if run.steps.is_empty() {
         return Ok(());
     }
-    let mut console = Console::new(run);
+    let mut console = match nav {
+        Some(nav) => Console::with_nav(run, nav),
+        None => Console::new(run),
+    };
     let mut out = io::stdout();
 
     enable_raw_mode()?;
@@ -377,7 +476,7 @@ mod tests {
     #[test]
     fn it_opens_on_the_requested_step() {
         let run = run_of(vec![step("login", true), step("me", true)]);
-        let console = Console::new(&run);
+        let console = Console::new(run);
         assert_eq!(console.step, 1, "the step you asked for, not its parent");
         assert_eq!(console.pane, Pane::View);
     }
@@ -385,7 +484,7 @@ mod tests {
     #[test]
     fn arrows_move_between_steps_and_panes() {
         let run = run_of(vec![step("login", true), step("me", true)]);
-        let mut console = Console::new(&run);
+        let mut console = Console::new(run);
 
         console.on_key(KeyEvent::from(KeyCode::Up));
         assert_eq!(console.step, 0);
@@ -403,7 +502,7 @@ mod tests {
     #[test]
     fn q_and_ctrl_c_close_it() {
         let run = run_of(vec![step("me", true)]);
-        let mut console = Console::new(&run);
+        let mut console = Console::new(run);
         assert!(!console.on_key(KeyEvent::from(KeyCode::Char('q'))));
         assert!(!console.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert!(console.on_key(KeyEvent::from(KeyCode::Char('j'))));
@@ -412,7 +511,7 @@ mod tests {
     #[test]
     fn secrets_are_masked_in_every_pane() {
         let run = run_of(vec![step("me", true)]);
-        let mut console = Console::new(&run);
+        let mut console = Console::new(run);
         for pane in Pane::ALL {
             console.pane = pane;
             let text = console.body().join("\n");
@@ -427,7 +526,7 @@ mod tests {
     #[test]
     fn a_skipped_step_says_so_instead_of_showing_a_stale_body() {
         let run = run_of(vec![step("me", false)]);
-        let mut console = Console::new(&run);
+        let mut console = Console::new(run);
         for pane in [Pane::Response, Pane::Headers, Pane::Timing] {
             console.pane = pane;
             assert!(
@@ -441,7 +540,7 @@ mod tests {
     #[test]
     fn the_timing_pane_shows_every_measured_phase() {
         let run = run_of(vec![step("me", true)]);
-        let mut console = Console::new(&run);
+        let mut console = Console::new(run);
         console.pane = Pane::Timing;
         let text = console.body().join("\n");
         for phase in ["DNS", "TCP", "waiting", "download", "total"] {
@@ -455,7 +554,7 @@ mod tests {
     fn a_frame_fits_the_terminal_it_was_given() {
         let mut run = run_of(vec![step("me", true)]);
         run.view = Some("# title\n\nline\n".repeat(50));
-        let mut console = Console::new(&run);
+        let mut console = Console::new(run);
         console.height = 20;
         assert!(
             console.frame().len() <= 20,
@@ -472,7 +571,7 @@ mod tests {
             200,
             &(1..=100).map(|i| format!("line {i}\n")).collect::<String>(),
         ));
-        let mut console = Console::new(&run);
+        let mut console = Console::new(run);
         console.pane = Pane::Response;
         console.height = 20;
         let first = console.frame();

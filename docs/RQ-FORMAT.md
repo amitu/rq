@@ -267,7 +267,8 @@ markdown link whose target starts with `rq:` points at another request in the pr
 ```
 
 Those links are numbered in the output (`#1287 [1]`), and the numbers are how you follow
-them: `rq r issues --follow 1`, repeatable to walk several pages in. Anything after `?`
+them — `rq r issues --follow 1` on the command line, or **the digit keys in the console**
+(`rq r repo -c`), where `backspace` goes back the way it does in a browser. Anything after `?`
 becomes variables for the request being opened, layered over the ones the run already had —
 so following a link differs from the page you were on by exactly what the link said.
 
