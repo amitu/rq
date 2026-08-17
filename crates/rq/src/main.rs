@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use rq::console;
 use rq::doc::Document;
 use rq::import;
 use rq::project::{self, Kind, Project};
@@ -123,6 +124,10 @@ struct RunArgs {
     /// Wall clock for each script, in milliseconds.
     #[arg(long, value_name = "MS")]
     script_timeout: Option<u64>,
+
+    /// Open the run in the console: arrow between steps, drill into each one.
+    #[arg(long, short = 'c')]
+    console: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -281,7 +286,7 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
             "{lead} {}  {} {}  {outcome_cell}",
             ui::bold(&step.name),
             step.method,
-            ui::dim(&short_url(&step.url)),
+            ui::dim(&ui::short_url(&step.url)),
         );
         for log in &step.logs {
             println!(
@@ -346,13 +351,17 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         println!("\n{}", ui::dim("── timing ──────────────────────────────"));
         for step in &outcome.steps {
             match &step.response {
-                Some(r) => println!(
-                    "{:<20} {:>6}ms  {} bytes",
-                    step.name,
-                    r.elapsed.as_millis(),
-                    r.bytes
-                ),
-                None => println!("{:<20} {:>8}", step.name, "skipped"),
+                Some(r) => {
+                    let phases = r
+                        .timings
+                        .phases()
+                        .into_iter()
+                        .map(|(name, d)| format!("{name} {}ms", d.as_millis()))
+                        .collect::<Vec<_>>()
+                        .join(&ui::dim(" · "));
+                    println!("{:<16} {:>6}ms  {phases}", step.name, r.elapsed.as_millis());
+                }
+                None => println!("{:<16} {:>8}", step.name, "skipped"),
             }
         }
     }
@@ -372,6 +381,14 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
     for step in &outcome.steps {
         for note in &step.notes {
             ui::note(&format!("{}: {note}", step.rel));
+        }
+    }
+
+    if args.console {
+        if console::available() {
+            console::open(&outcome)?;
+        } else {
+            ui::note("--console needs a terminal; printed the run instead");
         }
     }
 
@@ -400,18 +417,6 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
     } else {
         0
     })
-}
-
-/// `https://api.github.com/repos/x/y/issues` → `.../repos/x/y/issues`, the way a network
-/// panel abbreviates it.
-fn short_url(url: &str) -> String {
-    match url.split_once("://") {
-        Some((_, rest)) => match rest.find('/') {
-            Some(i) if rest.len() > 1 => format!("...{}", &rest[i..]),
-            _ => url.to_string(),
-        },
-        None => url.to_string(),
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -488,7 +493,7 @@ fn print_children(
                         doc.front
                             .url
                             .clone()
-                            .map(|u| short_url(&u))
+                            .map(|u| ui::short_url(&u))
                             .unwrap_or_default(),
                         doc.front.parents.clone(),
                     ),
@@ -595,7 +600,7 @@ fn save_curl(cli: &Cli, cwd: &Path, args: &CurlArgs) -> Result<i32> {
             ui::green(ui::tick()),
             ui::bold(rel),
             doc.front.method.clone().unwrap_or_else(|| "GET".into()),
-            short_url(doc.front.url.as_deref().unwrap_or(""))
+            ui::short_url(doc.front.url.as_deref().unwrap_or(""))
         );
     }
     report_notes(&report);

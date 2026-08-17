@@ -38,6 +38,9 @@ pub struct Step {
     pub url: String,
     pub request_headers: Vec<(String, String)>,
     pub body: Option<String>,
+    /// The request body as text, for the console's request pane. `None` when there is no
+    /// body, or when it is a file whose bytes belong on the wire and not on your screen.
+    pub request_body: Option<String>,
     /// `None` when a pre-request script called `rq.execution.skipRequest()` — the step ran,
     /// the request deliberately did not.
     pub response: Option<Response>,
@@ -328,6 +331,7 @@ pub fn run(
             url: prepared.full_url(),
             request_headers: prepared.headers.clone(),
             body: prepared.body.as_ref().map(|b| b.describe()),
+            request_body: prepared.body.as_ref().and_then(|b| b.preview()),
             response,
             captured,
             tests,
