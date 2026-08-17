@@ -527,3 +527,48 @@ fn the_list_says_what_each_request_is() {
     assert!(listing.contains("The home page"), "{listing}");
     assert!(listing.contains("Write a post"), "{listing}");
 }
+
+#[test]
+fn a_form_does_not_ask_when_the_command_line_already_answered() {
+    let app = App::new();
+    let before = app.total_posts();
+    // No terminal here at all, so this also covers CI: a form that blocked a pipeline
+    // would be a trap.
+    let out = Command::new(BIN)
+        .args(["r", "compose", "-e", "local", "--color=never", "--var"])
+        .arg(format!("host={}", app.server.base_url))
+        .args([
+            "--var",
+            "text=answered up front",
+            "--var",
+            "author=scripted",
+        ])
+        .arg("--project")
+        .arg(app_project())
+        .env_remove("RQ_PROJECT")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("Posted as @scripted"), "{text}");
+    assert_eq!(app.total_posts(), before + 1);
+}
+
+#[test]
+fn a_form_default_that_is_a_template_resolves() {
+    let app = App::new();
+    let out = Command::new(BIN)
+        .args(["r", "compose", "-e", "local", "--color=never", "--var"])
+        .arg(format!("host={}", app.server.base_url))
+        .args(["--var", "text=whose post is this"])
+        .arg("--project")
+        .arg(app_project())
+        .env_remove("RQ_PROJECT")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    // `author` defaults to `{{me}}`, which the environment sets to amitu. Sending the
+    // literal `{{me}}` is the bug this guards.
+    assert!(text.contains("Posted as @amitu"), "{text}");
+    assert!(!text.contains("{{me}}"), "{text}");
+}

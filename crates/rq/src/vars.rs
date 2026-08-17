@@ -188,7 +188,10 @@ pub fn resolve_declared(
             let label = spec.prompt.clone().unwrap_or_else(|| name.clone());
             let value = ask(&label, spec.default.as_deref(), spec.secret)?;
             let value = if value.is_empty() {
-                spec.default.clone().unwrap_or_default()
+                spec.default
+                    .as_deref()
+                    .map(|d| substitute(d, vars).text)
+                    .unwrap_or_default()
             } else {
                 value
             };
@@ -199,8 +202,12 @@ pub fn resolve_declared(
             continue;
         }
 
-        if let Some(d) = &spec.default {
-            vars.layer("default", [(name.clone(), d.clone())]);
+        if let Some(default) = &spec.default {
+            // A default may itself be a template — `login: { default: '{{owner}}' }`, or a
+            // form field that offers you your own handle. Resolve it against what is known
+            // so far, or the request goes out carrying `{{owner}}` as a literal.
+            let resolved = substitute(default, vars).text;
+            vars.layer("default", [(name.clone(), resolved)]);
         }
 
         if spec.required && vars.get(name).map(str::is_empty).unwrap_or(true) {
@@ -385,6 +392,21 @@ mod tests {
         )];
         let err = resolve_declared(&mut v, &declared, false, false).unwrap_err();
         assert!(err.to_string().contains("RQ_TEST_ABSENT"), "{err}");
+    }
+
+    #[test]
+    fn a_default_can_refer_to_another_variable() {
+        let mut v = Vars::new();
+        v.layer("environment", [("owner", "anthropics")]);
+        let declared = vec![(
+            "login".to_string(),
+            VarSpec {
+                default: Some("{{owner}}".into()),
+                ..VarSpec::default()
+            },
+        )];
+        resolve_declared(&mut v, &declared, false, false).unwrap();
+        assert_eq!(v.get("login"), Some("anthropics"));
     }
 
     #[test]

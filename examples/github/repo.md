@@ -10,7 +10,7 @@ A repository, and the front page of this workbook: every link below opens anothe
 
 # {{ response.full_name }}
 
-{{ response.description }}
+{% if response.description %}{{ response.description }}{% endif %}
 
 ★ {{ response.stargazers_count }} · forks {{ response.forks_count }} · open issues {{ response.open_issues_count }} · {{ response.language }}
 

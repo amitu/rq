@@ -16,7 +16,7 @@ One issue, rendered as something you'd actually read.
 
 ---
 
-{{ response.body }}
+{% if response.body %}{{ response.body }}{% endif %}
 
 ---
 

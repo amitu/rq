@@ -95,6 +95,7 @@ rq e issues        # open it in $EDITOR
 rq l               # the tree: every request, its method, what it depends on
 rq r me -c         # the console: arrow between the steps of a run, drill into each
 rq                 # bare: the project's requests, pick one and run it
+rq l -c            # the same list, explicitly
 ```
 
 Bare `rq` in a terminal opens the project itself: every request it holds, arrow to one,

@@ -263,16 +263,25 @@ is the short form for a default.
 Fields are ordinary variables once filled, so `{{text}}` works in the URL, the headers and
 the body like anything else.
 
-**Where the form appears:**
+**A form shows itself.** There is no flag: the request already said it wants filling in.
 
-- **In the console**, opening a link to a request that has one shows the form instead of
-  firing the request — a POST that happened because you looked at it would be a bug. `tab`
-  moves between fields, `enter` moves on and submits from the last one, `ctrl-s` submits
-  from anywhere, `esc` cancels. A link's own variables prefill matching fields and ride
-  along with the rest (`reply_to`, say, which the form never asks about).
-- **At the prompt**, a form field with no value is asked for, one line at a time — the same
-  path `vars: { prompt: … }` uses.
-- **In a script or CI**, `--var text=…` fills it and nothing is asked.
+- **`rq r compose`** on a terminal shows the form, and sends when you submit. The output
+  afterwards is the ordinary run output — filling a form does not change where your
+  results appear.
+- **In the console**, opening a link (or a list entry) for a request with a form shows the
+  form instead of firing it — a POST that happened because you *looked* at it would be a
+  bug. A link's own variables prefill matching fields and ride along with the rest
+  (`reply_to`, say, which the form never asks about).
+- **In a script or CI**, `--var text=…` answers it and nothing is asked. If every field is
+  answered there is no form; and with no terminal there is never one, because a form that
+  blocked a pipeline would be a trap.
+
+`tab` moves between fields, `enter` moves on and submits from the last one, `ctrl-s` sends
+from anywhere, `esc` cancels.
+
+**Defaults may be templates.** `default: '{{me}}'` is resolved against the command line,
+the active environment and `.env` before you see it — so the field shows *you*, and a
+non-interactive run sends the same value rather than the literal `{{me}}`.
 
 A required field that is empty refuses to submit and says which one, with the form still
 holding everything you typed.
