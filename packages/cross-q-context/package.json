@@ -24,6 +24,10 @@
     "./codegen": {
       "types": "./src/runtime/definitions/codegen/generate-types.ts",
       "default": "./src/runtime/definitions/codegen/generate-types.ts"
+    },
+    "./executor": {
+      "types": "./dist/runtime/engine/index.d.ts",
+      "default": "./dist/runtime/engine/index.js"
     }
   },
   "imports": {
@@ -42,13 +46,15 @@
   "scripts": {
     "build:wasm": "wasm-pack build ../../crates/cq-transform --target bundler --out-dir ../../packages/cross-q-context/engine --out-name cross_q_context && wasm-pack build ../../crates/cq-transform --target nodejs --out-dir ../../packages/cross-q-context/engine-node --out-name cross_q_context",
     "build:runtime": "tsc",
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs && node test/executor-smoke.mjs"
   },
   "dependencies": {
     "chai": "6.2.2"
   },
   "devDependencies": {
+    "@jitl/quickjs-singlefile-cjs-release-asyncify": "0.32.0",
     "@types/chai": "5.2.2",
+    "quickjs-emscripten-core": "0.32.0",
     "typescript": "5.7.3"
   }
 }
