@@ -3,11 +3,16 @@
 
 use anyhow::{bail, Context, Result};
 
+use crate::cookies::Jar;
 use crate::doc::{AuthSpec, Document, VarSpec};
 use crate::graph;
 use crate::http::{self, Payload, Prepared, Response};
 use crate::project::{Project, REQUEST_FILE};
 use crate::render;
+use crate::script::{
+    self, LogEntry, RequestHeaderMutation, ScriptEngine, ScriptExecutionResult, ScriptPhase,
+    TestResult, TestStatus,
+};
 use crate::vars::{self, Vars};
 
 #[derive(Clone, Debug, Default)]
@@ -21,6 +26,8 @@ pub struct RunOptions {
     pub interactive: bool,
     /// `--strict`: any note (unresolved variable, unexecuted script) fails the run.
     pub strict: bool,
+    /// Per-script wall clock handed to the engine. `None` = the engine's own default.
+    pub script_timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -31,9 +38,28 @@ pub struct Step {
     pub url: String,
     pub request_headers: Vec<(String, String)>,
     pub body: Option<String>,
-    pub response: Response,
+    /// `None` when a pre-request script called `rq.execution.skipRequest()` — the step ran,
+    /// the request deliberately did not.
+    pub response: Option<Response>,
     pub captured: Vec<(String, String)>,
+    /// `rq.test(...)` outcomes, in the order the script declared them.
+    pub tests: Vec<TestResult>,
+    /// `console.*` from the scripts on this step.
+    pub logs: Vec<LogEntry>,
     pub notes: Vec<String>,
+}
+
+impl Step {
+    pub fn skipped(&self) -> bool {
+        self.response.is_none()
+    }
+
+    pub fn failed_tests(&self) -> usize {
+        self.tests
+            .iter()
+            .filter(|t| t.status == TestStatus::Failed)
+            .count()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -54,14 +80,32 @@ impl Run {
         self.steps.last().expect("a run always has a final step")
     }
 
-    /// Non-zero when the requested step didn't come back 2xx — so `rq r` composes in CI.
+    /// The requested step didn't come back 2xx. Only `--fail` turns this into an exit code:
+    /// a 404 you asked for is a result, not an error.
     pub fn failed(&self) -> bool {
-        !self.target().response.ok()
+        self.target().response.as_ref().is_none_or(|r| !r.ok())
+    }
+
+    /// Failing `rq.test(...)` assertions across every step. **These do set the exit code**,
+    /// without a flag: an assertion that fails silently in CI is the whole reason people
+    /// stop trusting a test runner.
+    pub fn failed_tests(&self) -> usize {
+        self.steps.iter().map(Step::failed_tests).sum()
+    }
+
+    pub fn total_tests(&self) -> usize {
+        self.steps.iter().map(|s| s.tests.len()).sum()
     }
 }
 
-/// Run `target` and everything it declares as a parent.
-pub fn run(project: &Project, target: usize, opts: &RunOptions) -> Result<Run> {
+/// Run `target` and everything it declares as a parent, hosting `engine` for any
+/// `-- pre --` / `-- post --` script along the way.
+pub fn run(
+    project: &Project,
+    target: usize,
+    opts: &RunOptions,
+    engine: &dyn ScriptEngine,
+) -> Result<Run> {
     let order = graph::plan(project, target)?;
 
     // Environment layers are read once and shared by every step in the run.
@@ -104,6 +148,9 @@ pub fn run(project: &Project, target: usize, opts: &RunOptions) -> Result<Run> {
     let mut runtime: Vec<(String, String)> = Vec::new();
     let mut steps: Vec<Step> = Vec::new();
     let mut secrets: Vec<String> = Vec::new();
+    // One jar for the whole run, never written to disk (see `cookies`).
+    let mut jar = Jar::new();
+    let total_entries = order.len() as u32;
 
     for idx in order {
         let entry = &project.entries[idx];
@@ -130,34 +177,108 @@ pub fn run(project: &Project, target: usize, opts: &RunOptions) -> Result<Run> {
             .with_context(|| entry.rel.clone())?;
         secrets.extend(v.secret_values());
 
-        let prepared =
+        let mut prepared =
             prepare(&doc, &inherited, &v, &mut step_notes).with_context(|| entry.rel.clone())?;
-        http::check_url(&prepared.url).with_context(|| entry.rel.clone())?;
 
-        let response = http::send(&prepared).with_context(|| entry.rel.clone())?;
-        let ctx = context_of(&prepared, &response, &v);
+        let meta = script::ExecutionMetadata {
+            request_id: entry.rel.clone(),
+            request_name: entry.name.clone(),
+            iteration: 1,
+            iteration_count: 1,
+            entry_index: steps.len() as u32,
+            total_entries,
+            collection_id: project.entries[idx]
+                .parent
+                .map(|p| project.entries[p].rel.clone()),
+        };
+        let mut tests: Vec<TestResult> = Vec::new();
+        let mut logs: Vec<LogEntry> = Vec::new();
+        let mut skip = false;
 
-        let mut captured = Vec::new();
-        for (key, path) in &doc.front.capture {
-            match vars::extract(&ctx, path) {
-                Some(value) => {
-                    runtime.retain(|(k, _)| k != key);
-                    runtime.push((key.clone(), value.clone()));
-                    captured.push((key.clone(), value));
-                }
-                None => step_notes.push(format!(
-                    "capture `{key}`: nothing at `{path}` in the response"
-                )),
-            }
+        // --- pre-request -------------------------------------------------------------
+        if let Some(source) = doc.section("pre").filter(|s| !s.trim().is_empty()) {
+            let input = script::ScriptExecutionInput {
+                script: source.to_string(),
+                phase: ScriptPhase::PreRequest,
+                mode: script::ScriptExecutionMode::Safe,
+                context: build_context(&prepared, None, &v, &jar, meta.clone()),
+                timeout_ms: opts.script_timeout_ms,
+            };
+            let result = engine.execute(&input).with_context(|| entry.rel.clone())?;
+            apply_request_mutations(&mut prepared, &result, &mut step_notes);
+            skip = absorb(
+                &result,
+                ScriptPhase::PreRequest,
+                &mut runtime,
+                &mut tests,
+                &mut logs,
+                &mut step_notes,
+            );
         }
 
-        // Scripts are the next slice of work; until then, say so on every run rather than
-        // quietly sending a request whose pre-script never ran.
-        for section in ["pre", "post"] {
-            if doc.section(section).is_some_and(|s| !s.trim().is_empty()) {
-                step_notes.push(format!(
-                    "`-- {section} --` was NOT executed: this build has no script runtime yet"
-                ));
+        http::check_url(&prepared.url).with_context(|| entry.rel.clone())?;
+
+        // Variables a pre-request script set are only visible if we re-resolve what they
+        // touched, so re-substitute against the updated runtime layer before sending.
+        let response = if skip {
+            step_notes.push("the pre-request script called skipRequest(): not sent".into());
+            None
+        } else {
+            if let Some(cookie) = jar.header_for(&prepared.full_url()) {
+                if !prepared
+                    .headers
+                    .iter()
+                    .any(|(k, _)| k.eq_ignore_ascii_case("cookie"))
+                {
+                    prepared.headers.push(("Cookie".into(), cookie));
+                }
+            }
+            let response = http::send(&prepared).with_context(|| entry.rel.clone())?;
+            jar.ingest(&prepared.full_url(), &response.headers);
+            Some(response)
+        };
+
+        let ctx = response
+            .as_ref()
+            .map(|r| context_of(&prepared, r, &v))
+            .unwrap_or(serde_json::Value::Null);
+
+        // --- post-response -----------------------------------------------------------
+        if let (Some(source), Some(resp)) = (
+            doc.section("post").filter(|s| !s.trim().is_empty()),
+            response.as_ref(),
+        ) {
+            let input = script::ScriptExecutionInput {
+                script: source.to_string(),
+                phase: ScriptPhase::PostResponse,
+                mode: script::ScriptExecutionMode::Safe,
+                context: build_context(&prepared, Some(resp), &v, &jar, meta),
+                timeout_ms: opts.script_timeout_ms,
+            };
+            let result = engine.execute(&input).with_context(|| entry.rel.clone())?;
+            absorb(
+                &result,
+                ScriptPhase::PostResponse,
+                &mut runtime,
+                &mut tests,
+                &mut logs,
+                &mut step_notes,
+            );
+        }
+
+        let mut captured = Vec::new();
+        if response.is_some() {
+            for (key, path) in &doc.front.capture {
+                match vars::extract(&ctx, path) {
+                    Some(value) => {
+                        runtime.retain(|(k, _)| k != key);
+                        runtime.push((key.clone(), value.clone()));
+                        captured.push((key.clone(), value));
+                    }
+                    None => step_notes.push(format!(
+                        "capture `{key}`: nothing at `{path}` in the response"
+                    )),
+                }
             }
         }
 
@@ -166,20 +287,25 @@ pub fn run(project: &Project, target: usize, opts: &RunOptions) -> Result<Run> {
             rel: entry.rel.clone(),
             name: entry.name.clone(),
             method: prepared.method.clone(),
-            url: prepared.url.clone(),
+            url: prepared.full_url(),
             request_headers: prepared.headers.clone(),
             body: prepared.body.as_ref().map(|b| b.describe()),
             response,
             captured,
+            tests,
+            logs,
             notes: step_notes,
         };
 
         if is_target {
             let view = match doc.section("view").filter(|s| !s.trim().is_empty()) {
-                Some(tpl) => Some(render::render_view(tpl, &ctx)?),
-                None => None,
+                Some(tpl) if !step.skipped() => Some(render::render_view(tpl, &ctx)?),
+                _ => None,
             };
-            let raw = render::default_body(&step.response.body, step.response.json().as_ref());
+            let raw = match &step.response {
+                Some(r) => render::default_body(&r.body, r.json().as_ref()),
+                None => String::new(),
+            };
             let resolved = v
                 .iter()
                 .map(|(k, val)| {
@@ -350,7 +476,8 @@ pub fn prepare(
 
     Ok(Prepared {
         method: front.method.clone().unwrap_or_else(|| "GET".into()),
-        url: http::with_query(&url, &query),
+        url,
+        query,
         headers,
         body,
         timeout_ms: front.timeout.or(inherited.timeout),
@@ -539,6 +666,215 @@ pub fn context_of(req: &Prepared, resp: &Response, v: &Vars) -> serde_json::Valu
     })
 }
 
+// ---------------------------------------------------------------------------------------
+// The script seam
+// ---------------------------------------------------------------------------------------
+
+/// Build the serializable context a script runs against. `request` and `response` are
+/// shaped to cross-q-context's `model.ts`, and the variable scopes are bucketed by where
+/// each value actually came from — the origins `Vars` already tracks — so `rq.environment`
+/// and `rq.variables` mean in the CLI what they mean in the app.
+pub fn build_context(
+    req: &Prepared,
+    resp: Option<&Response>,
+    v: &Vars,
+    jar: &Jar,
+    info: script::ExecutionMetadata,
+) -> script::ScriptExecutionContext {
+    let mut ctx = script::ScriptExecutionContext {
+        info,
+        request: request_json(req),
+        response: resp.map(response_json),
+        host_allowlist: jar.hosts(),
+        cookie_jar_seed: jar
+            .hosts()
+            .into_iter()
+            .map(|host| script::CookieJarSeed {
+                cookies: jar.seed_for(&host),
+                host,
+            })
+            .collect(),
+        ..script::ScriptExecutionContext::default()
+    };
+
+    for (key, value) in v.iter() {
+        let secret = v.is_secret(key);
+        let data = serde_json::to_value(script::VariableData::new(value.clone(), secret))
+            .unwrap_or(serde_json::Value::Null);
+        let scope = match v.origin(key).unwrap_or("") {
+            "__global" | "global" => &mut ctx.global,
+            o if o.starts_with("collection") => &mut ctx.collection_variables,
+            "--var" | "capture" | "prompt" | "script" => &mut ctx.variables,
+            "default" => &mut ctx.variables,
+            _ => &mut ctx.environment,
+        };
+        scope.insert(key.clone(), data);
+        if secret {
+            ctx.secrets.insert(
+                key.clone(),
+                serde_json::to_value(script::VariableData::new(value.clone(), true))
+                    .unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
+    ctx
+}
+
+fn request_json(req: &Prepared) -> serde_json::Value {
+    let kv = |pairs: &[(String, String)]| -> Vec<serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(k, val)| serde_json::json!({ "key": k, "value": val }))
+            .collect()
+    };
+    let (content_type, body) = match &req.body {
+        Some(Payload::Text { text, media_type }) => (
+            media_type.clone(),
+            serde_json::json!({
+                "contentType": media_type,
+                "raw": text,
+                "rawContentType": media_type,
+                "formUrlEncoded": [],
+                "formData": [],
+            }),
+        ),
+        Some(Payload::Form(fields)) => (
+            "application/x-www-form-urlencoded".to_string(),
+            serde_json::json!({
+                "contentType": "application/x-www-form-urlencoded",
+                "formUrlEncoded": kv(fields),
+                "formData": [],
+            }),
+        ),
+        Some(Payload::Multipart(fields)) => (
+            "multipart/form-data".to_string(),
+            serde_json::json!({
+                "contentType": "multipart/form-data",
+                "formUrlEncoded": [],
+                "formData": fields
+                    .iter()
+                    .map(|(k, val)| serde_json::json!({ "key": k, "value": val, "type": "text" }))
+                    .collect::<Vec<_>>(),
+            }),
+        ),
+        Some(Payload::File { path, media_type }) => (
+            media_type.clone(),
+            serde_json::json!({
+                "contentType": media_type,
+                "binary": { "name": path, "path": path },
+                "formUrlEncoded": [],
+                "formData": [],
+            }),
+        ),
+        None => (
+            "none".to_string(),
+            serde_json::json!({ "contentType": "none", "formUrlEncoded": [], "formData": [] }),
+        ),
+    };
+
+    serde_json::json!({
+        "url": req.full_url(),
+        "method": req.method,
+        "headers": kv(&req.headers),
+        "queryParams": kv(&req.query),
+        "pathVariables": [],
+        "contentType": content_type,
+        "body": body,
+    })
+}
+
+fn response_json(resp: &Response) -> serde_json::Value {
+    let headers: serde_json::Map<String, serde_json::Value> = resp
+        .headers
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), serde_json::Value::String(v.clone())))
+        .collect();
+    serde_json::json!({
+        "status": resp.status,
+        "statusText": resp.status_text,
+        "headers": headers,
+        "body": resp.body,
+        "time": resp.elapsed.as_millis() as u64,
+        "size": resp.bytes,
+    })
+}
+
+/// Apply `rq.request.headers.*` changes a pre-request script recorded. Order matters — the
+/// diff is a log of what the script did, replayed in the same sequence.
+fn apply_request_mutations(
+    prepared: &mut Prepared,
+    result: &ScriptExecutionResult,
+    notes: &mut Vec<String>,
+) {
+    let Some(diff) = &result.request_mutation_diff else {
+        return;
+    };
+    for mutation in &diff.headers {
+        match mutation {
+            RequestHeaderMutation::Add { name, value } => {
+                prepared.headers.push((name.clone(), value.clone()));
+            }
+            RequestHeaderMutation::Upsert { name, value } => {
+                prepared
+                    .headers
+                    .retain(|(k, _)| !k.eq_ignore_ascii_case(name));
+                prepared.headers.push((name.clone(), value.clone()));
+            }
+            RequestHeaderMutation::Remove { name } => {
+                prepared
+                    .headers
+                    .retain(|(k, _)| !k.eq_ignore_ascii_case(name));
+            }
+            RequestHeaderMutation::Clear => prepared.headers.clear(),
+        }
+    }
+    if !diff.headers.is_empty() {
+        notes.push(format!(
+            "the pre-request script changed {} header(s)",
+            diff.headers.len()
+        ));
+    }
+}
+
+/// Fold one script result into the run: variables into the same runtime layer `capture:`
+/// writes to, tests and logs onto the step, everything else onto the record. Returns
+/// whether the script asked to skip the request.
+fn absorb(
+    result: &ScriptExecutionResult,
+    phase: ScriptPhase,
+    runtime: &mut Vec<(String, String)>,
+    tests: &mut Vec<TestResult>,
+    logs: &mut Vec<LogEntry>,
+    notes: &mut Vec<String>,
+) -> bool {
+    for (key, value) in result.mutation_diff.all() {
+        runtime.retain(|(k, _)| k != key);
+        match value {
+            serde_json::Value::Null => {} // an unset: removing it above is the whole job
+            serde_json::Value::String(s) => runtime.push((key.clone(), s.clone())),
+            other => runtime.push((key.clone(), other.to_string())),
+        }
+    }
+    tests.extend(result.test_results.iter().cloned());
+    logs.extend(result.logs.iter().cloned());
+
+    if let Some(error) = &result.error {
+        notes.push(error.clone());
+    }
+    match &result.execution_directive {
+        Some(script::ExecutionDirective::SkipRequest) => {
+            return matches!(phase, ScriptPhase::PreRequest)
+        }
+        Some(script::ExecutionDirective::SetNextRequest { target }) => notes.push(format!(
+            "setNextRequest({}) was ignored: rq walks the graph a request declares with \
+             `parents:`, so there is no linear run order to redirect",
+            target.as_deref().unwrap_or("null")
+        )),
+        None => {}
+    }
+    false
+}
+
 /// A starter document for `rq init`-style creation.
 pub fn scaffold(url: &str, method: &str) -> Document {
     let mut doc = Document::default();
@@ -609,7 +945,7 @@ mod tests {
         let src = "---\nurl: https://api.test/{{owner}}/x\nquery:\n  state: open\n\
                    headers:\n  Authorization: Bearer {{token}}\n---\n";
         let (p, notes) = prep(src, &[("owner", "acme"), ("token", "t0k")]);
-        assert_eq!(p.url, "https://api.test/acme/x?state=open");
+        assert_eq!(p.full_url(), "https://api.test/acme/x?state=open");
         assert_eq!(p.headers[0], ("Authorization".into(), "Bearer t0k".into()));
         assert!(notes.is_empty());
     }
@@ -652,7 +988,7 @@ mod tests {
     fn api_key_in_query_lands_on_the_url() {
         let src = "---\nurl: https://api.test\nauth: { type: api_key, key: k, value: v, in: query }\n---\n";
         let (p, _) = prep(src, &[]);
-        assert_eq!(p.url, "https://api.test?k=v");
+        assert_eq!(p.full_url(), "https://api.test?k=v");
     }
 
     #[test]

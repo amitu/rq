@@ -165,6 +165,14 @@ collections, then across the project.
 `capture:` values are paths into the same context a `-- view --` template sees (§7):
 `response.access_token`, `response.items[0].id`, `headers.etag`, `status`.
 
+**Cookies.** A run keeps a cookie jar, so the other common shape of a chain — the server
+sets a session with `Set-Cookie` and expects it back — works with nothing declared. Host
+and path matching, `Secure`, and `Max-Age=0` deletion are honoured; `Expires` is not
+evaluated, because a run lasts seconds and a wrong date parser silently dropping a live
+cookie would be worse. The jar lives for one invocation and is **never written to disk**: a
+terminal client that quietly persisted your session cookies would be storing credentials
+you never asked it to keep.
+
 ---
 
 ## 6. Sections
@@ -184,11 +192,30 @@ the file. A markdown rule (`---`) or an em-dash sentence is never mistaken for o
 Unknown sections are preserved verbatim, like unknown frontmatter keys.
 
 **Scripts.** `-- pre --` and `-- post --` are parsed, carried, and round-tripped, but this
-build has no script runtime: every run that has one says so, and `--strict` fails. The
-runtime is [`cross-q-context`](./CONTEXT.md), landing next. Scripts imported from Postman
-keep their `pm.*` source **verbatim** with the dialect noted — a textual `pm.` → `rq.`
-rename imports clean and throws at run time, which is the one failure this project refuses
-to ship.
+build ships **no script engine**: every run that has one says so on stderr, and `--strict`
+fails on it. The engine is [`cross-q-context`](./CONTEXT.md); `rq` hosts it rather than
+implementing it.
+
+What the host already does, so that a script behaves the same here as in the app the day
+the engine lands:
+
+| The script does | `rq` does |
+|---|---|
+| `rq.request.headers.add/upsert/remove/clear` | applies the change **before** the request is sent |
+| `rq.vars.set(...)` / `rq.environment.set(...)` | writes into the same runtime layer `capture:` writes to, so the next request in the graph reads it |
+| `rq.test(name, fn)` | prints ✓/✗ per assertion and **exits non-zero if any failed** |
+| `console.log(...)` | prints under the step it came from |
+| `rq.execution.skipRequest()` | doesn't send the request, and says so |
+| `rq.execution.setNextRequest(...)` | is **refused out loud** — `rq` walks the graph a request declares with `parents:`, so there is no linear order to redirect |
+| `rq.cookies.jar(host)` | is seeded from the run's cookie jar (below) |
+
+`--script-timeout <ms>` bounds each script. The CLI runs the **safe** engine only:
+`developer` mode is `node:vm`, which is not a security boundary, and a terminal client that
+ran a collection's scripts with host access would be a liability rather than a feature.
+
+Scripts imported from Postman keep their `pm.*` source **verbatim** with the dialect noted —
+a textual `pm.` → `rq.` rename imports clean and throws at run time, which is the one
+failure this project refuses to ship.
 
 ---
 
@@ -293,7 +320,8 @@ and read back whole — it is reported, never stripped.
 
 Named so you don't have to discover it:
 
-- **Scripts** (`-- pre --` / `-- post --`) parse and round-trip, but do not execute.
+- **Scripts** (`-- pre --` / `-- post --`) parse and round-trip, but do not execute — the
+  host side is built and tested (§6), the engine is not here yet.
 - **`-- form --`** is reserved; nothing reads it.
 - **Post-run navigation** (the DevTools-style panel) — `--show request|headers|timing|vars`
   prints the same information non-interactively today.
@@ -301,7 +329,7 @@ Named so you don't have to discover it:
 - **Terminal-width-aware tables** — columns are aligned to their content, so a table with
   very long cells is wider than an 80-column window and wraps. Nothing is truncated;
   narrow the column in the template (`{{ i.title | truncate(60) }}`) if you want it short.
-- **Saved response examples**, cookie jars, and data-driven iteration.
+- **Saved response examples** and data-driven iteration.
 - Protocols other than HTTP. GraphQL imports as a JSON POST body.
 
 Everything in §§1–8 is real, tested, and on the wire.

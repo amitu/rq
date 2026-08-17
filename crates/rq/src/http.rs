@@ -9,12 +9,22 @@ use anyhow::{bail, Context, Result};
 #[derive(Clone, Debug, Default)]
 pub struct Prepared {
     pub method: String,
+    /// The URL without the query string — `query` is kept apart so a script can read
+    /// `rq.request.queryParams` and so the two round-trip independently.
     pub url: String,
+    pub query: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub body: Option<Payload>,
     pub timeout_ms: Option<u64>,
     pub follow_redirects: bool,
     pub verify_tls: bool,
+}
+
+impl Prepared {
+    /// What actually goes on the wire: the URL with its query appended.
+    pub fn full_url(&self) -> String {
+        with_query(&self.url, &self.query)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -100,9 +110,10 @@ pub fn send(req: &Prepared) -> Result<Response> {
     let agent = ureq::Agent::new_with_config(builder.build());
 
     let method = req.method.to_ascii_uppercase();
+    let target = req.full_url();
     let mut http_req = ureq::http::Request::builder()
         .method(method.as_str())
-        .uri(&req.url);
+        .uri(&target);
     for (k, v) in extra_headers
         .iter()
         .filter(|(k, _)| !req.headers.iter().any(|(hk, _)| hk.eq_ignore_ascii_case(k)))
@@ -112,10 +123,10 @@ pub fn send(req: &Prepared) -> Result<Response> {
     }
     let http_req = http_req
         .body(body)
-        .with_context(|| format!("building the request for {}", req.url))?;
+        .with_context(|| format!("building the request for {target}"))?;
 
     let started = Instant::now();
-    let mut resp = agent.run(http_req).map_err(|e| explain(e, &req.url))?;
+    let mut resp = agent.run(http_req).map_err(|e| explain(e, &target))?;
     let status = resp.status();
     let headers: Vec<(String, String)> = resp
         .headers()

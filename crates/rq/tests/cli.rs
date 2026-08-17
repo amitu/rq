@@ -4,121 +4,14 @@
 //! that matter (a header that never went out, a captured token that never arrived) only
 //! show up on the wire.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+mod support;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::mpsc;
+
+use support::Stub;
 
 const BIN: &str = env!("CARGO_BIN_EXE_rq");
-
-/// What the stub saw, so a test can assert on what actually left the process.
-#[derive(Debug, Clone)]
-struct Received {
-    method: String,
-    path: String,
-    headers: Vec<(String, String)>,
-    body: String,
-}
-
-impl Received {
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
-    }
-}
-
-/// A one-thread HTTP server that answers `count` requests from a routing closure.
-struct Stub {
-    base: String,
-    seen: mpsc::Receiver<Received>,
-}
-
-impl Stub {
-    fn start<F>(count: usize, route: F) -> Stub
-    where
-        F: Fn(&Received) -> (u16, &'static str, String) + Send + 'static,
-    {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().unwrap().port();
-        let (tx, seen) = mpsc::channel();
-
-        std::thread::spawn(move || {
-            for _ in 0..count {
-                let Ok((stream, _)) = listener.accept() else {
-                    break;
-                };
-                if let Some(req) = serve(stream, &route) {
-                    let _ = tx.send(req);
-                }
-            }
-        });
-
-        Stub {
-            base: format!("http://127.0.0.1:{port}"),
-            seen,
-        }
-    }
-
-    fn next(&self) -> Received {
-        self.seen
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the stub server never saw a request")
-    }
-}
-
-fn serve<F>(mut stream: TcpStream, route: &F) -> Option<Received>
-where
-    F: Fn(&Received) -> (u16, &'static str, String),
-{
-    let mut reader = BufReader::new(stream.try_clone().ok()?);
-    let mut line = String::new();
-    reader.read_line(&mut line).ok()?;
-    let mut parts = line.split_whitespace();
-    let method = parts.next()?.to_string();
-    let path = parts.next()?.to_string();
-
-    let mut headers = Vec::new();
-    loop {
-        let mut header = String::new();
-        reader.read_line(&mut header).ok()?;
-        let header = header.trim_end();
-        if header.is_empty() {
-            break;
-        }
-        if let Some((k, v)) = header.split_once(':') {
-            headers.push((k.trim().to_string(), v.trim().to_string()));
-        }
-    }
-
-    let length: usize = headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.parse().ok())
-        .unwrap_or(0);
-    let mut body = vec![0u8; length];
-    if length > 0 {
-        reader.read_exact(&mut body).ok()?;
-    }
-
-    let received = Received {
-        method,
-        path,
-        headers,
-        body: String::from_utf8_lossy(&body).to_string(),
-    };
-    let (status, reason, payload) = route(&received);
-    let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-        payload.len()
-    );
-    stream.write_all(response.as_bytes()).ok()?;
-    stream.flush().ok()?;
-    Some(received)
-}
 
 // --- helpers ------------------------------------------------------------------------------
 
