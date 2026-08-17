@@ -104,7 +104,12 @@ fn runs_a_request_and_renders_its_view_as_a_table() {
     assert_eq!(seen.method, "GET");
     assert_eq!(seen.path, "/repos/anthropics/issues?state=open");
 
-    assert!(text.contains("200 OK"), "{text}");
+    // The narration is on stderr, so the view is all that a pipe would receive.
+    assert!(stderr(&out).contains("200 OK"), "{}", stderr(&out));
+    assert!(
+        !text.contains("200 OK"),
+        "the step tree leaked into stdout:\n{text}"
+    );
     assert!(text.contains("2 open issues in anthropics"), "{text}");
     // The table is column-aligned, not raw markdown pipes.
     assert!(
@@ -173,11 +178,16 @@ fn a_parent_runs_first_and_its_capture_feeds_the_child() {
     // The whole point: the token captured from login reached the second request.
     assert_eq!(me.header("authorization"), Some("Bearer tok-123"));
 
-    // Both steps are reported, parent first, with the capture shown.
-    let login_at = text.find("login").expect("login step missing");
-    let me_at = text.find("me ").expect("me step missing");
-    assert!(login_at < me_at, "{text}");
-    assert!(text.contains("captured token = tok-123"), "{text}");
+    // Both steps are reported, parent first, with the capture shown — on stderr.
+    let narration = stderr(&out);
+    let login_at = narration.find("login").expect("login step missing");
+    let me_at = narration.find("me ").expect("me step missing");
+    assert!(login_at < me_at, "{narration}");
+    assert!(
+        narration.contains("captured token = tok-123"),
+        "{narration}"
+    );
+    // …and the rendered view is the result.
     assert!(text.contains("Amit on pro"), "{text}");
 }
 
@@ -222,8 +232,9 @@ fn secrets_are_masked_in_shown_output() {
         .env("NO_COLOR", "1")
         .output()
         .unwrap();
-    let text = stdout(&out);
-    assert!(out.status.success(), "{text}{}", stderr(&out));
+    // Both streams: a secret must not appear on either one.
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
 
     // It went out for real…
     let seen = stub.next();
@@ -244,7 +255,7 @@ fn a_failing_status_is_visible_and_opt_in_for_the_exit_code() {
 
     let plain = f.rq(&["r", "missing"]);
     assert!(
-        stdout(&plain).contains("404 Not Found"),
+        stderr(&plain).contains("404 Not Found"),
         "{}",
         stdout(&plain)
     );

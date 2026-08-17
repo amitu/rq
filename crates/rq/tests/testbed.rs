@@ -112,8 +112,8 @@ fn the_whole_example_project_runs_against_the_example_backend() {
 fn the_timing_breakdown_is_real_against_a_server_that_actually_waits() {
     let f = Fixture::new();
     let out = f.rq(&["r", "slow", "-e", "local", "--show", "timing"]);
-    let text = stdout(&out);
-    assert!(out.status.success(), "{text}{}", stderr(&out));
+    let text = stderr(&out);
+    assert!(out.status.success(), "{text}{}", stdout(&out));
     assert!(text.contains("waiting"), "{text}");
 
     // The server slept 300ms, so the wait has to dominate — a timing pane that reported
@@ -144,8 +144,9 @@ fn a_timeout_is_reported_as_a_timeout() {
 fn secrets_from_the_environment_never_reach_the_screen() {
     let f = Fixture::new();
     let out = f.rq(&["r", "basic-auth", "-e", "local", "--show", "request"]);
-    let text = stdout(&out);
-    assert!(out.status.success(), "{text}{}", stderr(&out));
+    // `--show` is narration: it belongs beside the run, not in the piped result.
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
     // `password` is declared secret in environments/local.md, and Basic auth is built from
     // it — the header goes out, the value does not come back to the terminal.
     assert!(!text.contains("hunter2"), "{text}");
@@ -163,9 +164,9 @@ fn a_view_offers_numbered_links_and_follow_walks_them() {
     assert!(listed.contains("[1]"), "no links were numbered:\n{listed}");
 
     let out = f.rq(&["r", "issues", "-e", "local", "--follow", "1"]);
-    let text = stdout(&out);
-    assert!(out.status.success(), "{text}{}", stderr(&out));
-    assert!(text.contains("follow →"), "{text}");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(stderr(&out).contains("follow →"), "{}", stderr(&out));
     // The second page is a different request, run with the link's own variable.
     assert!(text.contains("Issue 1287"), "{text}");
 }
@@ -453,7 +454,11 @@ fn the_form_also_works_without_a_terminal() {
         .env_remove("RQ_PROJECT")
         .output()
         .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(out.status.success(), "{text}");
     assert!(text.contains("201 Created"), "{text}");
     assert_eq!(app.total_posts(), before + 1);
