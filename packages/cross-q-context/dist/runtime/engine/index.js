@@ -26,6 +26,15 @@ export { FETCH_ISOLATE_SHIM } from './isolated/shims/fetch.shim.js';
 export { UTIL_ISOLATE_SHIM } from './isolated/shims/util.shim.js';
 export { ZLIB_ISOLATE_SHIM } from './isolated/shims/zlib.shim.js';
 export { RQ_ISOLATE_SHIM, RQ_ITERATION_RESET_EXPR, RQ_COLLECT_EXPR } from './isolated/isolated-rq.js';
+// The require chain — REQUIRE_ISOLATE_SHIM (guest require) over resolveRequire (the built-in /
+// bridge / VENDOR_IIFES / SOURCE_BUNDLE tiers), the rollup source-bundler for user npm packages,
+// the shim order, and the package-error sentinel (relocated Node-free off vm-package-evaluator).
+export { REQUIRE_ISOLATE_SHIM, resolveRequire, extractRequireIds } from './isolated/isolated-require.js';
+export { createSourceBundler } from './isolated/source-bundler.js';
+export { ISOLATE_SHIMS } from './isolated/isolate-shim-order.js';
+export { NEEDS_BRIDGE_MODULE_GLOBALS } from './isolated/needs-bridge-globals.js';
+export { createImpossiblePackageError } from './isolated/impossible-error.js';
+export { PACKAGE_ERROR_SENTINEL, isScriptPackageUnsupportedError, createPackageError, } from './isolated/package-error-sentinel.js';
 // Capability bridges — the host-side halves that back the guest shims (console/process/fetch's
 // run-request/streams/deprecations/timers). Each pairs a createXBridge() (or a constant table)
 // with its *_ISOLATE_SHIM guest string. Installed by the host layer before the realm evals.
