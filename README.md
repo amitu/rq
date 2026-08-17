@@ -116,6 +116,26 @@ mutations, variable writes, test results, execution directives and cookie-jar se
 script produces are already wired through the run and covered by tests against a stub
 engine, so `cross-q-context` drops into one trait when it ships.
 
+## Try it against something real
+
+`examples/testbed/` is a project you can actually run, and `rq-testbed` is the API it talks
+to — a small dependency-free server (`std::net` and JSON, nothing else) with the endpoints
+the examples use: a login that hands out both a token and a session cookie, a `/me` that
+accepts either, a list worth rendering, and an `/echo` that mirrors whatever you sent.
+
+```bash
+cargo run -p rq-testbed          # http://127.0.0.1:8087 — `--routes` lists them
+cd examples/testbed
+rq r me -e local                 # login runs first, its token lands on this request
+rq r me-by-cookie -e local       # same endpoint, no header — the cookie jar carried it
+rq r issues -e local             # the rendered table
+rq r slow -e local --show timing # a server that really waits, so the phases are real
+```
+
+`crates/rq/tests/testbed.rs` runs that project against that server with the shipped binary,
+so the example, the docs and the client are checked against each other rather than against
+someone's memory of what they said.
+
 ## Docs
 
 - [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md) — the `rq` file format: the request document, the project, variables, chaining.
