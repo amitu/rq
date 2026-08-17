@@ -23,3 +23,4 @@ Mirrors whatever arrived. Handy for "did it actually send what I think it sent?"
 
 {{ response.method }} {{ response.path }} — {{ response.body_bytes }} bytes in
 X-Trace as received: {{ response.headers['x-trace'] }}
+User-Agent as received: {{ response.headers['user-agent'] }}

@@ -252,6 +252,20 @@ impl Project {
         load_document(&path)
     }
 
+    /// The project-wide `apis/__collection.md`, if there is one.
+    ///
+    /// `apis/` is not an entry in the tree — the scan starts inside it — so a top-level
+    /// request has no ancestor to inherit from. Without this, the one file that says
+    /// "every request in this project sends these headers" was read by the converter and
+    /// ignored by the runner.
+    pub fn root_collection(&self) -> Result<Option<(Document, Vec<Note>)>> {
+        let path = self.root.join(APIS_DIR).join(COLLECTION_FILE);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        load_document(&path).map(Some)
+    }
+
     /// A collection's own `__collection.md`, if it wrote one.
     pub fn load_collection(&self, idx: usize) -> Result<Option<(Document, Vec<Note>)>> {
         let path = self.entries[idx].file();

@@ -653,6 +653,10 @@ fn take_vars(map: &mut Mapping, notes: &mut Vec<Note>) -> Result<Vec<(String, Va
             Value::String(s) => s.clone(),
             other => scalar(other, "vars: key", notes)?,
         };
+        // `per_page: 10` is the natural way to write a default, and every value here is a
+        // string by the time it is used. Reporting that coercion on every run would train
+        // people to ignore notes, which is how the notes that matter get missed.
+        let notes = &mut Vec::new();
         let at = format!("vars.{name}");
         let spec = match val {
             Value::Mapping(mut sm) => VarSpec {

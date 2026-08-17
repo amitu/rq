@@ -101,6 +101,12 @@ prefix at all. Collapsing it silently changes what goes on the wire.
 An auth type this build can't send (`oauth_2`, `hawk`, …) is **preserved in the file** and
 reported on the run — a credential is never stripped just because it wasn't understood.
 
+**An empty credential is not a credential.** If the token, key value, or both halves of a
+basic pair resolve to nothing — unset, or still a literal `{{VAR}}` — the header is not
+sent, and the run says so. That is what lets a collection declare
+`auth: { type: bearer, token: '{{GH_TOKEN}}' }` for everyone and stay usable by someone who
+hasn't set a token, instead of turning every public request into a 401.
+
 An explicit `Authorization` header always wins over generated auth.
 
 ---
@@ -253,6 +259,21 @@ Jinja-compatible (via minijinja). The context:
 | `vars` | Every resolved variable. |
 | `request` | `{ method, url }` as sent. |
 
+**A view can link to other requests, which makes it a page rather than a report.** A
+markdown link whose target starts with `rq:` points at another request in the project:
+
+```markdown
+| [#{{ i.number }}](rq:issue?number={{ i.number }}) | {{ i.title }} |
+```
+
+Those links are numbered in the output (`#1287 [1]`), and the numbers are how you follow
+them: `rq r issues --follow 1`, repeatable to walk several pages in. Anything after `?`
+becomes variables for the request being opened, layered over the ones the run already had —
+so following a link differs from the page you were on by exactly what the link said.
+
+An ordinary `http(s)://` link renders but is **not** numbered: following one would mean
+issuing a request the project never described.
+
 Filters: everything minijinja ships, plus `date('YYYY-MM-DD')` for ISO-8601 timestamps
 (`HH`, `mm`, `ss` too; non-ISO input passes through untouched).
 
@@ -288,8 +309,10 @@ my-apis/
 stores a parent id, so `git mv` is a legal way to reorganize. `__`-prefixed directories are
 `rq`'s own and are never entities.
 
-`__collection.md` uses the same frontmatter, and its `headers`, `auth`, and `vars` are
-inherited by every request beneath it — nearer collections win, and a request always wins
+`apis/__collection.md` is the **project-wide** one: `apis/` is not itself a request or a
+collection you can name, so that file is where "every request in this project sends these
+headers" goes. Below it, each `__collection.md` uses the same frontmatter, and its
+`headers`, `auth`, and `vars` are inherited by every request beneath it — nearer collections win, and a request always wins
 over its collections. Its `-- pre --` / `-- post --` sections run around every request
 beneath it too (§6).
 

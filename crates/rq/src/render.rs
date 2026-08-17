@@ -9,6 +9,73 @@ use minijinja::{Environment, UndefinedBehavior};
 
 use crate::ui;
 
+/// A followable link found in a rendered view.
+///
+/// `[label](rq:name?a=b)` points at another request in the same project — that is what
+/// makes a view a *page* rather than a report. An ordinary `http(s)` link is rendered but
+/// not numbered: following one would mean issuing a request the project never described.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Link {
+    /// 1-based, in reading order — what `--follow N` and the console's digit keys take.
+    pub number: usize,
+    pub label: String,
+    /// The part after `rq:` — `name?a=b`.
+    pub target: String,
+}
+
+/// Rendered markdown, plus the links it offers.
+#[derive(Clone, Debug, Default)]
+pub struct Rendered {
+    pub text: String,
+    pub links: Vec<Link>,
+}
+
+/// Split `name?a=b&c=d` into the request name and the variables to run it with.
+pub fn parse_target(target: &str) -> (String, Vec<(String, String)>) {
+    let target = target.trim();
+    let (name, query) = match target.split_once('?') {
+        Some((n, q)) => (n, q),
+        None => (target, ""),
+    };
+    let vars = query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(k, v)| (k.trim().to_string(), percent_decode(v.trim())))
+        .collect();
+    (name.trim().to_string(), vars)
+}
+
+/// Undo the encoding a template may have produced when it built a link.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                Ok(byte) => {
+                    out.push(byte);
+                    i += 3;
+                }
+                Err(_) => {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            },
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
 /// Render a `-- view --` template against the run context.
 ///
 /// Undefined names are an **error**, not an empty string: a template that silently renders
@@ -56,6 +123,17 @@ fn date_filter(value: String, format: Option<String>) -> String {
 /// Render markdown for a terminal: headings, emphasis, code, lists, and — the one that
 /// matters — aligned tables.
 pub fn markdown_to_terminal(md: &str) -> String {
+    markdown(md).text
+}
+
+/// Render markdown for a terminal and collect the links it offers.
+pub fn markdown(md: &str) -> Rendered {
+    let mut links: Vec<Link> = Vec::new();
+    let text = render(md, &mut links);
+    Rendered { text, links }
+}
+
+fn render(md: &str, links: &mut Vec<Link>) -> String {
     let mut out = String::new();
     let lines: Vec<&str> = md.lines().collect();
     let mut i = 0;
@@ -92,12 +170,12 @@ pub fn markdown_to_terminal(md: &str) -> String {
                 rows.push(t);
                 i += 1;
             }
-            out.push_str(&render_table(&rows));
+            out.push_str(&render_table(&rows, links));
             continue;
         }
 
         if let Some(rest) = heading(trimmed) {
-            out.push_str(&ui::bold(&inline(rest)));
+            out.push_str(&ui::bold(&inline(rest, links)));
             out.push('\n');
             i += 1;
             continue;
@@ -124,19 +202,23 @@ pub fn markdown_to_terminal(md: &str) -> String {
             out.push_str(&format!(
                 "{}{bullet} {}\n",
                 " ".repeat(indent),
-                inline(rest)
+                inline(rest, links)
             ));
             i += 1;
             continue;
         }
 
         if let Some(rest) = trimmed.strip_prefix("> ") {
-            out.push_str(&format!("{} {}\n", ui::dim("│"), ui::italic(&inline(rest))));
+            out.push_str(&format!(
+                "{} {}\n",
+                ui::dim("│"),
+                ui::italic(&inline(rest, links))
+            ));
             i += 1;
             continue;
         }
 
-        out.push_str(&inline(line));
+        out.push_str(&inline(line, links));
         out.push('\n');
         i += 1;
     }
@@ -159,7 +241,7 @@ fn is_rule(line: &str) -> bool {
 
 /// A markdown table, column-aligned. The header separator row (`|---|---|`) is consumed,
 /// and its colons choose the alignment.
-fn render_table(rows: &[&str]) -> String {
+fn render_table(rows: &[&str], links: &mut Vec<Link>) -> String {
     let parse = |row: &str| -> Vec<String> {
         row.trim()
             .trim_start_matches('|')
@@ -190,7 +272,7 @@ fn render_table(rows: &[&str]) -> String {
             let rendered = cells
                 .iter()
                 .map(|c| {
-                    let text = inline(c);
+                    let text = inline(c, links);
                     if is_header {
                         ui::bold(&text)
                     } else {
@@ -280,7 +362,7 @@ impl Align {
 }
 
 /// Inline markdown: `**bold**`, `*italic*`, `` `code` ``, `[text](url)`.
-fn inline(text: &str) -> String {
+fn inline(text: &str, links: &mut Vec<Link>) -> String {
     let mut out = String::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -313,8 +395,22 @@ fn inline(text: &str) -> String {
                     if let Some(paren) = find(&chars, close + 2, ')') {
                         let label: String = chars[i + 1..close].iter().collect();
                         let url: String = chars[close + 2..paren].iter().collect();
-                        out.push_str(&ui::underline(&label));
-                        out.push_str(&ui::dim(&format!(" ({url})")));
+                        match url.trim().strip_prefix("rq:") {
+                            // A link into the project: number it, so it can be followed.
+                            Some(target) => {
+                                links.push(Link {
+                                    number: links.len() + 1,
+                                    label: label.clone(),
+                                    target: target.to_string(),
+                                });
+                                out.push_str(&ui::underline(&label));
+                                out.push_str(&ui::cyan(&format!(" [{}]", links.len())));
+                            }
+                            None => {
+                                out.push_str(&ui::underline(&label));
+                                out.push_str(&ui::dim(&format!(" ({url})")));
+                            }
+                        }
                         i = paren + 1;
                         continue;
                     }
