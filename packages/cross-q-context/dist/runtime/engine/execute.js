@@ -132,9 +132,20 @@ export async function executeScript(input) {
             bridge.install(ctx);
             installedGlobals.push(bridge.name);
         }
-        // Delegated fetch — only when the host supplies a sendRequest backend.
+        // Delegated fetch — only when the host supplies a sendRequest backend. Adapt the simple
+        // callback into the envelope-returning SendRequestHost the full bridge expects.
         if (input.sendRequest) {
-            const fetchBridge = createFetchBridge(input.sendRequest);
+            const fn = input.sendRequest;
+            const fetchBridge = createFetchBridge({
+                sendRequest: async (req) => {
+                    try {
+                        return { ok: true, response: await fn(req) };
+                    }
+                    catch (e) {
+                        return { ok: false, error: { kind: 'network', message: e instanceof Error ? e.message : String(e) } };
+                    }
+                },
+            });
             fetchBridge.install(ctx);
             installedGlobals.push(fetchBridge.name);
         }

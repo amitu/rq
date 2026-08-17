@@ -1,7 +1,10 @@
 export { executeScript } from './execute.js';
 export type { ExecuteScriptInput } from './execute.js';
 export { createFetchBridge } from './fetch-bridge.js';
-export type { FetchRequestData, FetchResponseData, SendRequestFn, BodyEncoding } from './host-types.js';
+export type { FetchRequestData, FetchResponseData, SendRequestFn, BodyEncoding, SendRequestHost, SerializedFetchRequest, SerializedFetchResponse, SerializedFetchError, SerializedFetchEnvelope, } from './host-types.js';
+export { createGuardedFetch, createGuardedLookup, isAddressBlocked, SsrfBlockedError, CLIENT_SSRF_POLICY, STRICT_SSRF_POLICY, } from './ssrf-guard.js';
+export type { SsrfPolicy } from './ssrf-guard.js';
+export { describeDelegationFailure, toDelegatedFetch } from './delegated-fetch.js';
 export { dumpHandle, marshalToHandle } from './isolated/marshal.js';
 export { createSafeBridge, createIgnoredBridge, pendingAsyncCalls } from './isolated/safe-bridge-factory.js';
 export type { Copyable, SafeBridge, BridgeHandler, AsyncBridgeHandler } from './isolated/safe-bridge-factory.js';

@@ -102,6 +102,28 @@ export type FetchResponseData = {
  * so egress/SSRF policy stays with the host. A rejection's message is the only channel the script
  * sees, so throw a bounded, non-request-derived message. */
 export type SendRequestFn = (request: FetchRequestData) => Promise<FetchResponseData>;
+export type SerializedFetchRequest = FetchRequestData;
+export type SerializedFetchResponse = FetchResponseData;
+export type FetchErrorKind = string;
+export type FetchDelegationErrorKind = string;
+/** Kind-tagged error a delegated fetch returns; `fetchKind`/`code` sharpen the boundary category. */
+export interface SerializedFetchError {
+    kind: FetchDelegationErrorKind;
+    message: string;
+    fetchKind?: FetchErrorKind;
+    code?: string;
+}
+export type SerializedFetchEnvelope = {
+    ok: true;
+    response: SerializedFetchResponse;
+} | {
+    ok: false;
+    error: SerializedFetchError;
+};
+/** The host fetcher the full engine delegates to (envelope-returning, app-compatible). */
+export interface SendRequestHost {
+    sendRequest(request: SerializedFetchRequest): Promise<SerializedFetchEnvelope>;
+}
 /** An error from one iteration of an on-message batch, tagged with the message it came from. */
 export interface ScriptMessageError {
     readonly messageIndex: number;
