@@ -52,9 +52,17 @@ struct Cli {
     #[arg(long = "var", value_name = "KEY=VALUE")]
     vars: Vec<String>,
 
-    /// Browse the list instead of printing it — the same flag `rq l` and `rq r` take.
+    /// Browse the list. On by default when there is a terminal to draw on.
     #[arg(long, short = 'c')]
     console: bool,
+
+    /// Print the list instead of browsing it.
+    #[arg(long, conflicts_with = "console")]
+    no_console: bool,
+
+    /// The project as JSON on stdout.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -80,9 +88,17 @@ enum Command {
     /// List the requests in this project. This is what bare `rq` does.
     #[command(alias = "list", alias = "ls")]
     L {
-        /// Browse them instead of printing: arrow to one, enter to run it.
+        /// Browse them: arrow to one, enter to run it. On by default on a terminal.
         #[arg(long, short = 'c')]
         console: bool,
+
+        /// Print them instead.
+        #[arg(long, conflicts_with = "console")]
+        no_console: bool,
+
+        /// The project as JSON.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Create an empty project in this directory.
@@ -141,9 +157,17 @@ struct RunArgs {
     #[arg(long, value_name = "MS")]
     script_timeout: Option<u64>,
 
-    /// Open the run in the console: arrow between steps, drill into each one.
+    /// Open the run in the console. On by default when there is a terminal to draw on.
     #[arg(long, short = 'c')]
     console: bool,
+
+    /// Don't open the console, even on a terminal. Printing only.
+    #[arg(long, conflicts_with = "console")]
+    no_console: bool,
+
+    /// The whole run as one JSON object on stdout, and nothing else.
+    #[arg(long)]
+    json: bool,
 
     /// Follow a numbered link from the rendered view, then show that. Repeatable, so
     /// `--follow 2 --follow 1` walks two pages in.
@@ -231,8 +255,12 @@ fn dispatch(cli: &Cli) -> Result<i32> {
     match &cli.command {
         // Bare `rq` *is* `rq l` — same output, same flags, no surprise depending on
         // whether something is watching. `-c` browses either way.
-        None => list_or_browse(cli, cli.console),
-        Some(Command::L { console }) => list_or_browse(cli, *console),
+        None => list_or_browse(cli, cli.console, cli.no_console, cli.json),
+        Some(Command::L {
+            console,
+            no_console,
+            json,
+        }) => list_or_browse(cli, *console, *no_console, *json),
         Some(Command::R(args)) => {
             let project = open(cli, &cwd)?;
             run_request(&project, args)
@@ -273,16 +301,61 @@ fn open(cli: &Cli, cwd: &Path) -> Result<Project> {
 }
 
 /// The project's requests: printed, or browsed when asked for and possible.
-fn list_or_browse(cli: &Cli, console: bool) -> Result<i32> {
+fn list_or_browse(cli: &Cli, console: bool, no_console: bool, json: bool) -> Result<i32> {
     let project = open(cli, &std::env::current_dir()?)?;
+    if json {
+        println!("{:#}", project_json(&project));
+        return Ok(0);
+    }
+    // Browsing is what you want when you are looking; printing is what you want when
+    // something else is reading. `--console` insists, `--no-console` refuses.
+    if wants_console(console, no_console) {
+        return browse(cli, &project);
+    }
     if console {
-        if console::available() {
-            return browse(cli, &project);
-        }
         ui::note("--console needs a terminal; printed the list instead");
     }
     list(&project);
     Ok(0)
+}
+
+/// Interactive unless told otherwise, and never without a terminal to be interactive in.
+///
+/// `--console` does not force anything a pipe cannot do; it only makes the intent explicit,
+/// so that when there is no terminal we can say so instead of silently printing.
+fn wants_console(_console: bool, no_console: bool) -> bool {
+    !no_console && console::available()
+}
+
+/// The project, for tooling: one object per runnable request.
+fn project_json(project: &Project) -> serde_json::Value {
+    let requests: Vec<serde_json::Value> = project
+        .requests()
+        .map(|(idx, entry)| {
+            let doc = project.load(idx).ok();
+            let front = doc.as_ref().map(|(d, _)| &d.front);
+            serde_json::json!({
+                "name": entry.rel,
+                "method": front.and_then(|f| f.method.clone()).unwrap_or_else(|| "GET".into()),
+                "url": front.and_then(|f| f.url.clone()),
+                "description": doc.as_ref().and_then(|(d, _)| d.summary()),
+                "parents": front.map(|f| f.parents.clone()).unwrap_or_default(),
+                "collection": entry.kind == Kind::Collection,
+                "form": doc
+                    .as_ref()
+                    .and_then(|(d, _)| d.form().ok())
+                    .map(|fields| fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "root": project.root,
+        "requests": requests,
+        "environments": project.environments(),
+        "active_environment": project.active_env(),
+        "notes": project.notes,
+    })
 }
 
 /// Open the project browser: the request list, with the same environment and variables a
@@ -310,6 +383,70 @@ fn browse(cli: &Cli, project: &Project) -> Result<i32> {
 // ---------------------------------------------------------------------------------------
 // rq r
 // ---------------------------------------------------------------------------------------
+
+/// One run, as data. Everything the terminal shows and the things it can't: per-phase
+/// timings, every header, the parsed body when there is one.
+///
+/// This is the shape CI reads — `rq r checks --json | jq '.tests.failed'` — so it carries
+/// the run rather than a rendering of it.
+fn run_json(outcome: &run::Run) -> serde_json::Value {
+    let steps: Vec<serde_json::Value> = outcome
+        .steps
+        .iter()
+        .map(|step| {
+            let response = step.response.as_ref();
+            serde_json::json!({
+                "name": step.rel,
+                "method": step.method,
+                "url": step.url,
+                "skipped": step.skipped(),
+                "status": response.map(|r| r.status),
+                "statusText": response.map(|r| r.status_text.clone()),
+                "headers": response.map(|r| r
+                    .headers
+                    .iter()
+                    .map(|(k, v)| (k.to_lowercase(), serde_json::Value::String(v.clone())))
+                    .collect::<serde_json::Map<String, serde_json::Value>>()),
+                "bytes": response.map(|r| r.bytes),
+                "timeMs": response.map(|r| r.elapsed.as_millis() as u64),
+                "timings": response.map(|r| serde_json::json!({
+                    "dnsMs": r.timings.dns.as_millis() as u64,
+                    "tcpMs": r.timings.tcp.as_millis() as u64,
+                    "waitingMs": r.timings.waiting.as_millis() as u64,
+                    "downloadMs": r.timings.download.as_millis() as u64,
+                })),
+                "captured": step
+                    .captured
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect::<serde_json::Map<String, serde_json::Value>>(),
+                "tests": step.tests.iter().map(|t| serde_json::json!({
+                    "name": t.name,
+                    "status": format!("{:?}", t.status).to_lowercase(),
+                    "error": t.error,
+                })).collect::<Vec<_>>(),
+                "notes": step.notes,
+            })
+        })
+        .collect();
+
+    let target = outcome.target();
+    let response = target.response.as_ref();
+    serde_json::json!({
+        "request": target.rel,
+        "ok": response.map(|r| r.ok()).unwrap_or(false),
+        "steps": steps,
+        "body": response.map(|r| r.body.clone()),
+        // The parsed body when it is JSON, so nobody has to pipe through `fromjson`.
+        "json": response.and_then(|r| r.json()),
+        "view": outcome.view,
+        "tests": {
+            "total": outcome.total_tests(),
+            "failed": outcome.failed_tests(),
+        },
+        "notes": outcome.notes,
+    })
+}
 
 /// The form a request declares, filled in — or `None` when there is nothing to ask.
 ///
@@ -380,14 +517,14 @@ fn print_run(outcome: &run::Run, args: &RunArgs) {
             ),
             None => ui::dim("skipped"),
         };
-        println!(
+        eprintln!(
             "{lead} {}  {} {}  {outcome_cell}",
             ui::bold(&step.name),
             step.method,
             ui::dim(&ui::short_url(&step.url)),
         );
         for log in &step.logs {
-            println!(
+            eprintln!(
                 "     {} {}",
                 ui::dim(&format!("{}:", log.level)),
                 ui::redact(&log.message(), secrets)
@@ -404,7 +541,7 @@ fn print_run(outcome: &run::Run, args: &RunArgs) {
                 .as_deref()
                 .map(|e| ui::dim(&format!(" — {e}")))
                 .unwrap_or_default();
-            println!("     {mark} {name}{detail}");
+            eprintln!("     {mark} {name}{detail}");
         }
         for (key, value) in &step.captured {
             let shown = if secrets.iter().any(|s| s == value) {
@@ -412,32 +549,32 @@ fn print_run(outcome: &run::Run, args: &RunArgs) {
             } else {
                 truncate(value, 40)
             };
-            println!("     {} {} = {}", ui::dim("captured"), ui::cyan(key), shown);
+            eprintln!("     {} {} = {}", ui::dim("captured"), ui::cyan(key), shown);
         }
     }
 
     let target_step = outcome.target();
 
     if show(Show::Request) {
-        println!("\n{}", ui::dim("── request ─────────────────────────────"));
-        println!("{} {}", target_step.method, target_step.url);
+        eprintln!("\n{}", ui::dim("── request ─────────────────────────────"));
+        eprintln!("{} {}", target_step.method, target_step.url);
         for (k, v) in &target_step.request_headers {
-            println!("{k}: {}", ui::redact(v, secrets));
+            eprintln!("{k}: {}", ui::redact(v, secrets));
         }
         if let Some(body) = &target_step.body {
-            println!("{}", ui::dim(&format!("[{body}]")));
+            eprintln!("{}", ui::dim(&format!("[{body}]")));
         }
     }
     if show(Show::Headers) {
-        println!("\n{}", ui::dim("── response headers ────────────────────"));
+        eprintln!("\n{}", ui::dim("── response headers ────────────────────"));
         for (k, v) in target_step.response.iter().flat_map(|r| r.headers.iter()) {
-            println!("{k}: {v}");
+            eprintln!("{k}: {v}");
         }
     }
     if show(Show::Vars) {
-        println!("\n{}", ui::dim("── variables ───────────────────────────"));
+        eprintln!("\n{}", ui::dim("── variables ───────────────────────────"));
         for (key, value, origin) in &outcome.vars {
-            println!(
+            eprintln!(
                 "{:<24} {:<32} {}",
                 ui::cyan(key),
                 truncate(value, 32),
@@ -446,7 +583,7 @@ fn print_run(outcome: &run::Run, args: &RunArgs) {
         }
     }
     if show(Show::Timing) {
-        println!("\n{}", ui::dim("── timing ──────────────────────────────"));
+        eprintln!("\n{}", ui::dim("── timing ──────────────────────────────"));
         for step in &outcome.steps {
             match &step.response {
                 Some(r) => {
@@ -457,14 +594,16 @@ fn print_run(outcome: &run::Run, args: &RunArgs) {
                         .map(|(name, d)| format!("{name} {}ms", d.as_millis()))
                         .collect::<Vec<_>>()
                         .join(&ui::dim(" · "));
-                    println!("{:<16} {:>6}ms  {phases}", step.name, r.elapsed.as_millis());
+                    eprintln!("{:<16} {:>6}ms  {phases}", step.name, r.elapsed.as_millis());
                 }
-                None => println!("{:<16} {:>8}", step.name, "skipped"),
+                None => eprintln!("{:<16} {:>8}", step.name, "skipped"),
             }
         }
     }
 
-    println!();
+    // The result goes to stdout and nowhere else, so `rq r x > file` and `rq r x | jq`
+    // get exactly what a person sees on screen — the same bytes either way.
+    eprintln!();
     let body = if args.raw || outcome.view.is_none() {
         outcome.raw.clone()
     } else {
@@ -512,7 +651,11 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
     // The engine this build hosts. Swapping in a real one is this line.
     let engine = script::NoEngine;
     let outcome = run::run(project, target, &opts, &engine)?;
-    print_run(&outcome, args);
+    if args.json {
+        println!("{:#}", run_json(&outcome));
+    } else {
+        print_run(&outcome, args);
+    }
 
     // Link following: each hop replaces what is on screen, the way clicking does.
     let mut outcome = outcome;
@@ -528,7 +671,7 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
                 }
             );
         };
-        println!(
+        eprintln!(
             "\n{} {}",
             ui::dim("follow →"),
             ui::bold(&format!("{} ({})", link.label.trim(), link.target))
@@ -537,8 +680,8 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         print_run(&outcome, args);
     }
 
-    if args.console {
-        if console::available() {
+    if !args.json && wants_console(args.console, args.no_console) {
+        {
             // The console navigates: its links run through the same project, options and
             // engine this run used, so following one stays in the same session.
             // Inside the console nothing may prompt on the terminal — the alt screen is
@@ -553,9 +696,9 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
                 engine: &engine,
             };
             console::open(outcome.clone(), Some(nav))?;
-        } else {
-            ui::note("--console needs a terminal; printed the run instead");
         }
+    } else if args.console {
+        ui::note("--console needs a terminal; printed the run instead");
     }
 
     let failed_tests = outcome.failed_tests();
@@ -565,7 +708,7 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
             outcome.total_tests() - failed_tests,
             outcome.total_tests()
         );
-        println!(
+        eprintln!(
             "\n{}",
             if failed_tests == 0 {
                 ui::green(&summary)

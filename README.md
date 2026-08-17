@@ -165,6 +165,39 @@ A page is a `-- view --`. A link is `[label](rq:name?var=value)`. A form is `-- 
 That is the whole vocabulary, and it is the same markdown you would have written to
 document the API.
 
+## Piping, scripts and CI
+
+One rule: **stdout is the result, stderr is the narration, and the result is the same
+either way.** Only two things change when nothing is watching — where the narration lands
+visually, and whether the console opens.
+
+```bash
+rq r issues                 # a terminal: the rendered view, plus the console
+rq r issues > report.md     # the same rendered view, alone, in the file
+rq r issues --raw | jq .    # the response body
+rq r issues --json | jq .   # the whole run: status, headers, timings, tests, captures
+rq --json | jq '.requests'  # the project itself, for tooling and completions
+```
+
+The step tree, captured values, test lines and notes go to **stderr**, so they stay visible
+while you work and stay out of your data when you pipe. Nothing is ever asked on a
+terminal that isn't there: a `-- form --` is skipped, prompts are skipped, and a missing
+required value is an error rather than a hang.
+
+`--json` on a run carries what the terminal can't show anyway — every header, the per-phase
+timings, each test's status — which is what makes it the shape for CI:
+
+```bash
+rq r checks --json | jq -e '.tests.failed == 0'
+```
+
+Exit codes: **0** normally, **1** when a `rq.test(...)` failed (no flag needed — an
+assertion that fails quietly is how people stop trusting a runner) or when `--fail` is set
+and the response wasn't 2xx, **2** for anything rq itself couldn't do.
+
+`--no-console` turns off the interactive layer anywhere, for recordings and for scripts
+that do run in a terminal.
+
 ## Docs
 
 - [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md) — the `rq` file format: the request document, the project, variables, chaining.
