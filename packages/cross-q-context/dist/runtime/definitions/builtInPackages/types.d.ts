@@ -38,6 +38,31 @@ export type ScriptPackageUnsupportedReason = 'native_addon' | 'live_socket' | 'l
  * (RQ-5625, needed by xml2js → `xml2Json`). To fix another one, add its browserify
  * polyfill as a sandbox-node devDependency and set both fields.
  */
+/**
+ * How Developer mode keeps a `require()`d built-in's async work visible to the
+ * `AsyncRegistry` (ADR-219, RQ-5671 Phase 3).
+ *
+ * Safe mode needs no equivalent: every `needs_bridge` module reaches the host
+ * through a counted bridge, so its coverage is automatic. Developer's `require()`
+ * hands the script the REAL Node module, so anything async it starts is invisible
+ * unless wrapped here — the same enumerated-vs-structural gap RQ-5671 closed for
+ * globals, one level down.
+ *
+ * This field is **required**, so a new built-in cannot be added without deciding.
+ *
+ * - `registry-timers` — the module IS the timer surface; serve the registry's own
+ *   wrappers instead of Node's (`timers`).
+ * - `callback-last` — one-shot callback-style async APIs; wrap so a hold is held
+ *   until the callback fires (`crypto`, `zlib`).
+ * - `not-an-async-source` — cannot start async work on its own in this sandbox.
+ *   Justify per entry: pure sync (`path`, `assert`, …), or async-capable only when
+ *   driven by something already covered (`stream` has no fs/net to pump it, and
+ *   `util.promisify` merely wraps a function whose own class already applies).
+ */
+export type DeveloperAsyncTreatment = 'registry-timers' | 'callback-last' | 'not-an-async-source';
+/** The async-classified global names (timers + fetch) — the Developer engine's async surface.
+ * Defined here as a literal union (the app derives it from GLOBAL_NAMES in a codegen file). */
+export type AsyncGlobalName = 'setTimeout' | 'setInterval' | 'clearTimeout' | 'clearInterval' | 'fetch';
 export interface NodeBuiltinPackage {
     /** require() identifier (e.g., 'crypto') */
     readonly id: string;
@@ -47,6 +72,12 @@ export interface NodeBuiltinPackage {
     readonly description: string;
     /** Safe-mode resolution class (ADR-010). Drives the in-isolate require chain. */
     readonly safeModeClass: SafeModeClass;
+    /**
+     * How Developer mode keeps this module's async work registry-visible (ADR-219).
+     * Required: adding a built-in forces the decision rather than defaulting to
+     * "invisible".
+     */
+    readonly developerAsync: DeveloperAsyncTreatment;
     /** Why this package is unavailable in Safe mode — present iff safeModeClass is 'impossible'. */
     readonly impossibleReason?: ScriptPackageUnsupportedReason;
     /**

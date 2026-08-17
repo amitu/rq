@@ -13,6 +13,13 @@
 // cookies, and on-message batching.
 export { QuickJsEngine } from './engine.js';
 export { QuickJsSandbox, NODE_QUICKJS_HOST } from './quickjs-sandbox.js';
+// The node:vm DEVELOPER engine (trusted-code, more liberal than the QuickJS sandbox) + the
+// DispatchingSandbox that lets a host pick safe-vs-developer per execution (ScriptExecutionMode).
+// Node-only. The faker dynamic-variable resolver is injected (cross-q-context carries no faker).
+export { NodeSandbox } from './developer/node-sandbox.js';
+export { DispatchingSandbox } from './developer/dispatching-sandbox.js';
+export { buildRq, createExecutionState } from './developer/builder.js';
+export { registerDynamicVariables } from './developer/dynamic-variables.js';
 // The lean convenience entry — run a script and get the result as a Promise (no streaming).
 export { executeScript } from './execute.js';
 export { createFetchBridge } from './fetch-bridge.js';

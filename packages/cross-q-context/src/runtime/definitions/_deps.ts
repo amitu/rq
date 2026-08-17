@@ -160,4 +160,6 @@ export interface ScriptErrorLocation {
  * and full parameter/return model stay host-side; the rq.* API only holds and invokes it. */
 export interface VariableResolver {
   resolve(...args: unknown[]): unknown;
+  /** The catalog this resolver provides — the developer engine registers a `$name()` per entry. */
+  list(): ReadonlyArray<{ readonly name: string }>;
 }
