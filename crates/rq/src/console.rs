@@ -471,7 +471,7 @@ pub struct FormState {
 }
 
 impl FormState {
-    fn new(rel: String, title: String, fields: Vec<FormField>) -> FormState {
+    pub fn new(rel: String, title: String, fields: Vec<FormField>) -> FormState {
         let values = fields
             .iter()
             .map(|f| f.default.clone().unwrap_or_default())
@@ -498,7 +498,7 @@ impl FormState {
     }
 
     /// The field values as variables for the request.
-    fn as_vars(&self) -> Vec<(String, String)> {
+    pub fn as_vars(&self) -> Vec<(String, String)> {
         self.fields
             .iter()
             .zip(&self.values)
@@ -506,7 +506,7 @@ impl FormState {
             .collect()
     }
 
-    fn missing(&self) -> Option<&FormField> {
+    pub fn missing(&self) -> Option<&FormField> {
         self.fields
             .iter()
             .zip(&self.values)
@@ -514,7 +514,7 @@ impl FormState {
             .map(|(f, _)| f)
     }
 
-    fn lines(&self, width: usize) -> Vec<String> {
+    pub fn lines(&self, width: usize) -> Vec<String> {
         let mut out = vec![ui::bold(&self.title), String::new()];
         let label_width = self
             .fields
@@ -982,6 +982,105 @@ fn lines(text: &str) -> Vec<String> {
 /// Is there a terminal to draw on? A console that opened while piping would hang a script.
 pub fn available() -> bool {
     io::stdout().is_terminal() && io::stdin().is_terminal()
+}
+
+/// Fill in a form on its own, outside the console: what `rq r <request>` does when the
+/// request declares one.
+///
+/// Returns the values, or `None` if the person cancelled. The alt screen is entered and
+/// left around the form, so what you see afterwards is the ordinary run output — filling a
+/// form should not change where your results appear.
+pub fn fill_form(
+    title: &str,
+    fields: Vec<FormField>,
+    prefill: &[(String, String)],
+) -> Result<Option<Vec<(String, String)>>> {
+    if fields.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let mut state = FormState::new(String::new(), title.to_string(), fields);
+    for (key, value) in prefill {
+        if let Some(i) = state.fields.iter().position(|f| f.name == *key) {
+            state.values[i] = value.clone();
+        }
+    }
+
+    let mut out = io::stdout();
+    enable_raw_mode()?;
+    execute!(out, crossterm::terminal::EnterAlternateScreen, cursor::Hide)?;
+    let outcome = fill_loop(&mut state, &mut out);
+    execute!(out, crossterm::terminal::LeaveAlternateScreen, cursor::Show)?;
+    disable_raw_mode()?;
+    outcome
+}
+
+fn fill_loop(state: &mut FormState, out: &mut io::Stdout) -> Result<Option<Vec<(String, String)>>> {
+    let mut message: Option<String> = None;
+    loop {
+        let (width, height) = crossterm::terminal::size().unwrap_or((100, 24));
+        let (width, height) = ((width as usize).max(40), (height as usize).max(10));
+
+        queue!(out, cursor::MoveTo(0, 0), Clear(ClearType::All))?;
+        let mut lines = state.lines(width);
+        while lines.len() + 2 < height {
+            lines.push(String::new());
+        }
+        lines.push(match &message {
+            Some(m) => format!(
+                "{}  {}",
+                ui::cyan(m),
+                ui::dim("enter next · ctrl-s send · esc cancel")
+            ),
+            None => ui::dim("enter next · ctrl-s send · esc cancel"),
+        });
+        for line in lines {
+            queue!(out, cursor::MoveToColumn(0))?;
+            write!(out, "{line}\r\n")?;
+        }
+        out.flush()?;
+
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != event::KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                match state.missing() {
+                    Some(field) => message = Some(format!("{} is required", field.title())),
+                    None => return Ok(Some(state.as_vars())),
+                }
+            }
+            KeyCode::Enter => {
+                if state.cursor + 1 < state.fields.len() {
+                    state.cursor += 1;
+                } else {
+                    match state.missing() {
+                        Some(field) => message = Some(format!("{} is required", field.title())),
+                        None => return Ok(Some(state.as_vars())),
+                    }
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => state.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Down | KeyCode::Tab => {
+                state.cursor = (state.cursor + 1).min(state.fields.len() - 1)
+            }
+            KeyCode::Backspace => {
+                if let Some(value) = state.values.get_mut(state.cursor) {
+                    value.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(value) = state.values.get_mut(state.cursor) {
+                    value.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Open the console over a finished run and block until the user quits. With a [`Nav`],

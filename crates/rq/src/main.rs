@@ -75,7 +75,12 @@ enum Command {
 
     /// List the requests in this project.
     #[command(alias = "list", alias = "ls")]
-    L,
+    L {
+        /// Browse them instead of printing: arrow to one, enter to run it. What bare `rq`
+        /// does.
+        #[arg(long, short = 'c')]
+        console: bool,
+    },
 
     /// Create an empty project in this directory.
     Init {
@@ -221,30 +226,14 @@ fn restore_sigpipe() {
 fn dispatch(cli: &Cli) -> Result<i32> {
     let cwd = std::env::current_dir()?;
     match &cli.command {
-        // Bare `rq` opens the project; `rq l` always prints it. Piping bare `rq`
-        // prints too — a command that blocked on a terminal that isn't there would be
-        // a bad citizen in a shell pipeline.
-        None if console::available() => {
+        // Bare `rq` browses; `rq l` prints; `rq l -c` browses, so the two commands take
+        // the same flag for the same thing. Piping bare `rq` prints too — a command that
+        // blocked on a terminal that isn't there would be a bad citizen in a pipeline.
+        None | Some(Command::L { console: true }) if console::available() => {
             let project = open(cli, &cwd)?;
-            let mut cli_vars = Vec::new();
-            for raw in &cli.vars {
-                cli_vars.push(vars::parse_assignment(raw)?);
-            }
-            let opts = RunOptions {
-                cli_vars,
-                environment: cli.environment.clone(),
-                interactive: false,
-                ..RunOptions::default()
-            };
-            let engine = script::NoEngine;
-            console::browse(console::Nav {
-                project: &project,
-                opts: &opts,
-                engine: &engine,
-            })?;
-            Ok(0)
+            browse(cli, &project)
         }
-        None | Some(Command::L) => {
+        None | Some(Command::L { .. }) => {
             let project = open(cli, &cwd)?;
             list(&project);
             Ok(0)
@@ -288,9 +277,75 @@ fn open(cli: &Cli, cwd: &Path) -> Result<Project> {
     Project::find(cli.project.as_deref(), cwd)
 }
 
+/// Open the project browser: the request list, with the same environment and variables a
+/// run would use.
+fn browse(cli: &Cli, project: &Project) -> Result<i32> {
+    let mut cli_vars = Vec::new();
+    for raw in &cli.vars {
+        cli_vars.push(vars::parse_assignment(raw)?);
+    }
+    let opts = RunOptions {
+        cli_vars,
+        environment: cli.environment.clone(),
+        interactive: false,
+        ..RunOptions::default()
+    };
+    let engine = script::NoEngine;
+    console::browse(console::Nav {
+        project,
+        opts: &opts,
+        engine: &engine,
+    })?;
+    Ok(0)
+}
+
 // ---------------------------------------------------------------------------------------
 // rq r
 // ---------------------------------------------------------------------------------------
+
+/// The form a request declares, filled in — or `None` when there is nothing to ask.
+///
+/// Nothing is asked when: the request has no form, there is no terminal to ask on (CI
+/// passes `--var`, and a form that blocked a pipeline would be a trap), or every field
+/// already has a value.
+fn maybe_fill_form(
+    project: &Project,
+    target: usize,
+    opts: &RunOptions,
+) -> Result<Option<Vec<(String, String)>>> {
+    if !console::available() {
+        return Ok(None);
+    }
+    let (doc, _) = project.load(target)?;
+    let mut fields = doc.form().map_err(|e| anyhow::anyhow!("{e}"))?;
+    if fields.is_empty() {
+        return Ok(None);
+    }
+
+    // `default: '{{me}}'` should show you, not its own source code.
+    let ambient = run::ambient_vars(project, opts);
+    for field in &mut fields {
+        if let Some(default) = &field.default {
+            field.default = Some(vars::substitute(default, &ambient).text);
+        }
+    }
+
+    let supplied: Vec<(String, String)> = opts.cli_vars.clone();
+    if fields
+        .iter()
+        .all(|f| supplied.iter().any(|(k, v)| *k == f.name && !v.is_empty()))
+    {
+        return Ok(None);
+    }
+
+    let title = doc
+        .summary()
+        .unwrap_or_else(|| project.entries[target].rel.clone());
+    match console::fill_form(&title, fields, &supplied)? {
+        Some(values) => Ok(Some(values)),
+        None => bail!("cancelled"),
+    }
+}
 
 /// Everything one run puts on screen: the step tree, whatever `--show` asked for, and
 /// the rendered view. Following a link prints the next page with the same function, so
@@ -427,7 +482,7 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         cli_vars.push(vars::parse_assignment(raw)?);
     }
 
-    let opts = RunOptions {
+    let mut opts = RunOptions {
         cli_vars,
         environment: args.environment.clone(),
         prompt: args.prompt,
@@ -435,6 +490,16 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         strict: args.strict,
         script_timeout_ms: args.script_timeout,
     };
+
+    // A request that declares a `-- form --` is asking to be filled in. Show the form —
+    // no flag, because the request already said so. Everything already supplied on the
+    // command line is prefilled, and if that covers every field there is nothing to ask.
+    if let Some(values) = maybe_fill_form(project, target, &opts)? {
+        for (key, value) in values {
+            opts.cli_vars.retain(|(k, _)| *k != key);
+            opts.cli_vars.push((key, value));
+        }
+    }
 
     // The engine this build hosts. Swapping in a real one is this line.
     let engine = script::NoEngine;

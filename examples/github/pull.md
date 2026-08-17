@@ -18,7 +18,7 @@ One pull request: what it changes, and where it wants to land.
 
 ---
 
-{{ response.body }}
+{% if response.body %}{{ response.body }}{% endif %}
 
 ---
 

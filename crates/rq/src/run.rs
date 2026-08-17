@@ -1035,6 +1035,40 @@ fn absorb(
     false
 }
 
+/// The variables that exist before any request is prepared: the command line, the active
+/// environment, and `.env`.
+///
+/// A form's `default: '{{me}}'` is resolved against these — the value has to come from
+/// somewhere, and "somewhere" is whatever the project already knows before you type.
+pub fn ambient_vars(project: &Project, opts: &RunOptions) -> Vars {
+    let mut vars = Vars::new();
+    vars.layer("--var", opts.cli_vars.clone());
+
+    let env_name = opts
+        .environment
+        .clone()
+        .or_else(|| project.active_env())
+        .filter(|n| !n.is_empty());
+    if let Some(name) = &env_name {
+        if let Ok((doc, _)) = project.load_env(name) {
+            let values: Vec<(String, String)> = doc
+                .front
+                .vars
+                .iter()
+                .filter_map(|(key, spec)| env_value(spec).map(|v| (key.clone(), v)))
+                .collect();
+            for (key, spec) in &doc.front.vars {
+                if spec.secret {
+                    vars.mark_secret(key);
+                }
+            }
+            vars.layer(name, values);
+        }
+    }
+    vars.layer(".env", project.dotenv());
+    vars
+}
+
 /// Follow a link out of a finished run: resolve `name?a=b` against the project and run it,
 /// with the link's own variables layered on top of the ones the run already had.
 ///
