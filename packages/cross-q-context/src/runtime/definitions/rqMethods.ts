@@ -5,7 +5,7 @@ import type {
   RequestHeaderMutation,
   ScriptExecutionContext,
   ScriptPhase,
-  TestResult,
+  RawTestResult,
   VisualizerDirective,
 } from './_deps.js';
 
@@ -215,7 +215,7 @@ function createVariableScope(
  */
 export function createRqNamespace(
   executionState: {
-    testResults: TestResult[];
+    testResults: RawTestResult[];
     rawMutations: RawScopeMutations;
     requestMutations?: RequestHeaderMutation[];
     executionDirective?: ExecutionDirective;

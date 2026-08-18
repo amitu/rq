@@ -1,4 +1,4 @@
-export type { ExecutionDirective, ExecutionMetadata, FeatureFlags, Json, LogEntry, MutationDiff, RequestHeaderMutation, RequestMutationDiff, RuntimeComponent, SandboxExecutionEvent, SandboxHostCallbacks, ScriptExecutionResult, StreamReader, TestResult, TestStatus, } from '../contract.js';
+export type { ExecutionDirective, ExecutionMetadata, FeatureFlags, Json, LogEntry, RawMutationDiff, RequestHeaderMutation, RequestMutationDiff, RuntimeComponent, RawSandboxExecutionEvent, SandboxHostCallbacks, RawScriptExecutionResult, StreamReader, RawTestResult, TestStatus, } from '../contract.js';
 export { ScriptExecutionMode, ScriptPhase } from '../contract.js';
 export type { EnvironmentVariables, FormDataKeyValue, GraphQLBody, GraphQLRequest, GraphQLResponse, GrpcRequest, GrpcScriptResponse, GrpcStreamMessage, HttpBody, HttpRequest, HttpResponse, KeyValue, ParsedGraphQLRequest, ParsedGrpcRequest, ParsedHttpRequest, ParsedKeyValue, PathVariable, ScriptMessageInput, VariableData, VariableDataType, } from '../model.js';
 export { AuthType, EntryType, GrpcMethodType, RawBodyContentType, RequestContentType, RequestMethod } from '../model.js';

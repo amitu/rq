@@ -1,4 +1,5 @@
-import type { ExecutionMetadata, FeatureFlags, Json, RuntimeComponent, SandboxExecutionEvent, SandboxHostCallbacks, ScriptPhase, ScriptExecutionMode, StreamReader } from './contract.js';
+import type { ExecutionMetadata, FeatureFlags, Json, RuntimeComponent, SandboxHostCallbacks, ScriptPhase, ScriptExecutionMode, StreamReader } from './contract.js';
+import type { SandboxExecutionEvent } from './engine/host-types.js';
 import type { EntryType, EnvironmentVariables, GraphQLResponse, GrpcScriptResponse, HttpResponse, ParsedGraphQLRequest, ParsedGrpcRequest, ParsedHttpRequest, ScriptMessageInput } from './model.js';
 /** Read-side cookie seed for `rq.cookies.jar(host)` (ADR-105): pre-fetched cookies per allowed host. */
 export interface CookieJarSeed {

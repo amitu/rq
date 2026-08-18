@@ -7,12 +7,15 @@ import type {
   FeatureFlags,
   Json,
   RuntimeComponent,
-  SandboxExecutionEvent,
   SandboxHostCallbacks,
   ScriptPhase,
   ScriptExecutionMode,
   StreamReader,
 } from './contract.js';
+// The event a host is actually handed. Type-only, and mutual with host-types' import of
+// `ScriptExecutionInput` from here — erased at build, and it keeps `Sandbox` honest: whoever
+// implements this streams inflated results, not the guest's raw ones.
+import type { SandboxExecutionEvent } from './engine/host-types.js';
 import type {
   EntryType,
   EnvironmentVariables,
