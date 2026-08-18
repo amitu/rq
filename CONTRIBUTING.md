@@ -56,7 +56,7 @@ cargo clippy --all-targets -- -D warnings  # the linter — must be clean
 cargo fmt                                  # the formatter — run before committing
 ```
 
-Rust 1.85+, 2021 edition. `cargo` downloads dependencies on first `test` — no separate
+Rust 1.87+, 2021 edition. `cargo` downloads dependencies on first `test` — no separate
 install step.
 
 **Contribution loop.**

@@ -257,7 +257,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-Rust 1.85+ (2021 edition). One workspace, one version train. `cargo run -p rq -- <args>`
+Rust 1.87+ (2021 edition). One workspace, one version train. `cargo run -p rq -- <args>`
 runs the CLI out of the working tree without installing it.
 
 ## Testing
