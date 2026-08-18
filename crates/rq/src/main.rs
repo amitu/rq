@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use rq::console;
 use rq::doc::Document;
+use rq::embedded;
 use rq::import;
 use rq::project::{self, Kind, Project};
 use rq::render;
@@ -384,16 +385,23 @@ fn browse(cli: &Cli, project: &Project) -> Result<i32> {
 // rq r
 // ---------------------------------------------------------------------------------------
 
-/// The engine to run scripts with: cross-q-context when it can be found, and an honest
-/// nothing when it can't.
+/// The engine to run scripts with.
 ///
-/// A missing engine is not an error — every request that has no script runs exactly as
-/// before. It becomes visible only on a run that needed one, which is where it matters.
+/// By default it is the one compiled into this binary: the cross-q-context guest realm on an
+/// in-process QuickJS. Nothing to install, so `-- pre --` and `-- post --` work the same on a
+/// laptop, in CI, and in a downloaded release.
+///
+/// Setting `RQ_SCRIPT_ENGINE` opts back into the Node sidecar against a cross-q-context
+/// checkout. That is for developing the engine — running a script through both and comparing
+/// — and for the suites that pin it at a nonexistent path to keep themselves hermetic.
 fn pick_engine() -> Box<dyn script::ScriptEngine> {
-    match script::NodeEngine::discover() {
-        Ok(engine) => Box::new(engine),
-        Err(why) => Box::new(script::NoEngine::because(why)),
+    if std::env::var_os("RQ_SCRIPT_ENGINE").is_some() {
+        return match script::NodeEngine::discover() {
+            Ok(engine) => Box::new(engine),
+            Err(why) => Box::new(script::NoEngine::because(why)),
+        };
     }
+    Box::new(embedded::EmbeddedEngine)
 }
 
 /// One run, as data. Everything the terminal shows and the things it can't: per-phase

@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.85"
+          toolchain: "1.87"
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
 
@@ -97,11 +97,15 @@ jobs:
       - name: build the runtime
         run: npm run build:runtime
 
-      - name: dist/ is in sync with src/
+      # `build:runtime` emits both: dist/ for JS hosts, and the guest bundle rq compiles in.
+      # A stale bundle means the shipped binary is running an older rq.* than the package
+      # defines — invisible at runtime, so it is caught here.
+      - name: dist/ and the guest bundle are in sync with src/
+        working-directory: .
         run: |
-          if ! git diff --quiet -- dist; then
-            echo "::error::dist/ is stale — run 'npm run build:runtime' in packages/cross-q-context and commit the result"
-            git diff --stat -- dist
+          if ! git diff --quiet -- packages/cross-q-context/dist crates/rq/assets/guest-bundle.json; then
+            echo "::error::generated output is stale — run 'npm run build:runtime' in packages/cross-q-context and commit the result"
+            git diff --stat -- packages/cross-q-context/dist crates/rq/assets/guest-bundle.json
             exit 1
           fi
 
