@@ -3,6 +3,7 @@ pub use rq_doc as doc;
 
 pub mod console;
 pub mod cookies;
+pub mod embedded;
 pub mod graph;
 pub mod http;
 pub mod import;

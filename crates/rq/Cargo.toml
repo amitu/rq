@@ -31,6 +31,16 @@ rpassword = "7"
 # Raw mode and key events for the post-run console. Drawing is ours — a layout library
 # would be a large dependency for panes this plain.
 crossterm = "0.29"
+rquickjs = "0.12"
+base64 = "0.23.1"
+hex = "0.4.3"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+md-5 = "0.11.0"
+hmac = "0.13.0"
+flate2 = "1.1.9"
+uuid = { version = "1.24.1", features = ["v4"] }
+getrandom = "0.4.3"
 # Only to restore the default SIGPIPE handler — see `main`.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

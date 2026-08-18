@@ -127,16 +127,17 @@ print and set the exit code, `console.log` appears under its step, `rq.variables
 reaches the next request in the graph, and `rq.request.headers.*` changes what goes on the
 wire.
 
-The engine is JavaScript driving QuickJS-on-WASM and `rq` is a Rust binary, so scripts need
-**Node** and a built cross-q-context:
+**Nothing to install.** The engine is compiled into the binary: QuickJS in-process, running
+cross-q-context's own guest realm — the `rq.*` namespace, the `pm.*` shims, chai and the
+`require`-able packages are source the package generates and `rq` evaluates. So the semantics
+have one owner and no second implementation, and a downloaded release runs scripts on a
+machine with no Node on it at all.
 
-```bash
-cd packages/cross-q-context && npm install    # once
-```
+`require('crypto')`, `require('lodash')`, `Buffer`, `zlib`, `fetch` and `rq.sendRequest` all
+work; a package a sandbox genuinely cannot serve (`fs`, a native addon) says so and why.
 
-`rq` finds it in this repo automatically; `RQ_SCRIPT_ENGINE=/path/to/cross-q-context` points
-it elsewhere. Without it everything else works exactly as before and any run with a script
-says precisely what is missing — `--strict` turns that into a failure.
+Setting `RQ_SCRIPT_ENGINE=/path/to/cross-q-context` runs scripts through Node against a
+checkout instead — for working on the engine and comparing the two.
 
 ## Try it against something real
 

@@ -1,14 +1,14 @@
-//! Scripts, run by the engine `rq` actually ships with.
+//! Scripts, run by the engine `rq` actually ships with — and by the one it used to.
 //!
-//! Everything else stands a stub in for cross-q-context. This one runs it: real QuickJS,
-//! real `rq.*`, real assertions — the only way to know the wire contract between a Rust
-//! host and a JavaScript engine is the one both sides believe in.
+//! Every case here runs TWICE where it can: once on the embedded QuickJS host compiled into
+//! the binary, and once on the Node sidecar against a cross-q-context checkout. Identical
+//! assertions on both. That is the point of the suite: the embedded host is new Rust code
+//! around the package's own guest realm, and the way to know it kept the semantics is to run
+//! the same script through the engine that already had them.
 //!
-//! **Needs `node` and a built cross-q-context with its dependencies installed** (`npm
-//! install` in `packages/cross-q-context`). Absent those it skips with a message rather
-//! than failing, because they are not something a `cargo test` can fetch — but set
-//! `RQ_REQUIRE_ENGINE=1` and the skip becomes a failure, which is what CI should do once
-//! this is wired there.
+//! The embedded engine always runs — it needs nothing installed. The sidecar leg needs `node`
+//! and a built cross-q-context (`npm install` in `packages/cross-q-context`); absent those it
+//! is skipped with a message, or fails if `RQ_REQUIRE_ENGINE=1` is set, which is what CI does.
 
 mod support;
 
@@ -19,8 +19,47 @@ use support::Stub;
 
 const BIN: &str = env!("CARGO_BIN_EXE_rq");
 
-/// Is there an engine to test? Returns the package path, or explains itself.
-fn engine() -> Option<PathBuf> {
+/// Which engine a case is running on.
+#[derive(Clone, Debug)]
+enum Engine {
+    /// Compiled in. Needs nothing on the machine, so it is never skipped.
+    Embedded,
+    /// `node` on a cross-q-context checkout — the engine the semantics come from.
+    Sidecar(PathBuf),
+}
+
+impl Engine {
+    fn label(&self) -> &str {
+        match self {
+            Engine::Embedded => "embedded",
+            Engine::Sidecar(_) => "sidecar",
+        }
+    }
+}
+
+/// The two cases below run on the embedded engine ONLY, and the reason is worth recording:
+/// rq's sidecar loads cross-q-context's *lean* `executeScript`, which wires `console` and the
+/// cookie jar and nothing else — `require('crypto')` there answers "not available in the safe
+/// sandbox". The embedded host wires the Node-builtin bridges the full `QuickJsEngine` has,
+/// because a request script that cannot hash a payload or gunzip a body is not much of a
+/// script. So this is the embedded engine being *more* capable than what it replaced, and
+/// there is nothing to compare it against until the sidecar is moved onto the full engine.
+fn embedded_only() -> Vec<Engine> {
+    vec![Engine::Embedded]
+}
+
+/// Every engine available here. The embedded one always; the sidecar when the checkout is
+/// usable, so the two are compared on any machine set up to do it.
+fn engines() -> Vec<Engine> {
+    let mut out = vec![Engine::Embedded];
+    if let Some(package) = sidecar() {
+        out.push(Engine::Sidecar(package));
+    }
+    out
+}
+
+/// Is the sidecar available? Returns the package path, or explains itself.
+fn sidecar() -> Option<PathBuf> {
     let package = std::env::var_os("RQ_SCRIPT_ENGINE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -52,14 +91,14 @@ fn engine() -> Option<PathBuf> {
 
 struct Fixture {
     dir: tempfile::TempDir,
-    package: PathBuf,
+    engine: Engine,
 }
 
 impl Fixture {
-    fn new(package: PathBuf) -> Fixture {
+    fn new(engine: Engine) -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         rq::project::init(dir.path()).unwrap();
-        Fixture { dir, package }
+        Fixture { dir, engine }
     }
 
     fn write(&self, name: &str, contents: &str) {
@@ -67,14 +106,17 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> (String, String, i32) {
-        let out = Command::new(BIN)
-            .args(args)
+        let mut cmd = Command::new(BIN);
+        cmd.args(args)
             .args(["--color=never", "--no-console"])
             .current_dir(self.dir.path())
-            .env("RQ_SCRIPT_ENGINE", &self.package)
-            .env_remove("RQ_PROJECT")
-            .output()
-            .expect("running rq");
+            .env_remove("RQ_PROJECT");
+        match &self.engine {
+            // Unset means "use the one compiled in" — the default a user gets.
+            Engine::Embedded => cmd.env_remove("RQ_SCRIPT_ENGINE"),
+            Engine::Sidecar(package) => cmd.env("RQ_SCRIPT_ENGINE", package),
+        };
+        let out = cmd.output().expect("running rq");
         (
             String::from_utf8_lossy(&out.stdout).to_string(),
             String::from_utf8_lossy(&out.stderr).to_string(),
@@ -83,11 +125,9 @@ impl Fixture {
     }
 }
 
-#[test]
-fn a_post_response_script_really_runs() {
-    let Some(package) = engine() else { return };
+fn case_a_post_response_script_really_runs(engine: Engine) {
     let stub = Stub::start(1, |_| (200, "OK", "{\"id\":7,\"name\":\"seven\"}".into()));
-    let f = Fixture::new(package);
+    let f = Fixture::new(engine.clone());
     f.write(
         "thing",
         &format!(
@@ -108,11 +148,9 @@ fn a_post_response_script_really_runs() {
     );
 }
 
-#[test]
-fn a_failing_assertion_fails_the_run() {
-    let Some(package) = engine() else { return };
+fn case_a_failing_assertion_fails_the_run(engine: Engine) {
     let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
-    let f = Fixture::new(package);
+    let f = Fixture::new(engine.clone());
     f.write(
         "checked",
         &format!(
@@ -127,14 +165,12 @@ fn a_failing_assertion_fails_the_run() {
     assert!(narration.contains("on purpose"), "{narration}");
 }
 
-#[test]
-fn a_variable_a_script_sets_reaches_the_next_request() {
-    let Some(package) = engine() else { return };
+fn case_a_variable_a_script_sets_reaches_the_next_request(engine: Engine) {
     let stub = Stub::start(2, |req| match req.path.as_str() {
         "/login" => (200, "OK", "{\"token\":\"tok-from-script\"}".into()),
         _ => (200, "OK", "{}".into()),
     });
-    let f = Fixture::new(package);
+    let f = Fixture::new(engine.clone());
     f.write(
         "login",
         &format!(
@@ -161,11 +197,9 @@ fn a_variable_a_script_sets_reaches_the_next_request() {
     );
 }
 
-#[test]
-fn a_pre_request_script_can_change_the_request() {
-    let Some(package) = engine() else { return };
+fn case_a_pre_request_script_can_change_the_request(engine: Engine) {
     let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
-    let f = Fixture::new(package);
+    let f = Fixture::new(engine.clone());
     f.write(
         "signed",
         &format!(
@@ -180,11 +214,9 @@ fn a_pre_request_script_can_change_the_request() {
     assert_eq!(stub.next().header("x-signature"), Some("abc123"));
 }
 
-#[test]
-fn a_script_that_throws_is_reported_without_losing_the_response() {
-    let Some(package) = engine() else { return };
+fn case_a_script_that_throws_is_reported_without_losing_the_response(engine: Engine) {
     let stub = Stub::start(1, |_| (200, "OK", "{\"still\":\"here\"}".into()));
-    let f = Fixture::new(package);
+    let f = Fixture::new(engine.clone());
     f.write(
         "broken",
         &format!(
@@ -202,4 +234,146 @@ fn a_script_that_throws_is_reported_without_losing_the_response() {
         result.contains("still"),
         "the response survives a broken script: {result}"
     );
+}
+
+/// `crypto`, `Buffer`, `zlib` and `require` in the embedded host are Rust code, so this
+/// asserts against digests computed outside the test entirely (shasum, openssl, base64) —
+/// agreement between two engines is not correctness, and here there is only one engine that
+/// can do this at all (see `embedded_only`).
+fn case_the_node_builtins_are_the_same_builtins(engine: Engine) {
+    let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new(engine.clone());
+    f.write(
+        "builtins",
+        &format!(
+            "---\nurl: {}/x\n---\n\n-- post --\n\n\
+             const crypto = require('crypto');\n\
+             const zlib = require('zlib');\n\
+             const _ = require('lodash');\n\
+             rq.test('sha256', () => rq.expect(crypto.createHash('sha256').update('abc').digest('hex'))\n\
+                 .to.equal('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'));\n\
+             rq.test('md5', () => rq.expect(crypto.createHash('md5').update('abc').digest('hex'))\n\
+                 .to.equal('900150983cd24fb0d6963f7d28e17f72'));\n\
+             rq.test('hmac sha256', () => rq.expect(crypto.createHmac('sha256', 'key').update('abc').digest('hex'))\n\
+                 .to.equal('9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab'));\n\
+             rq.test('base64 out', () => rq.expect(Buffer.from('hello', 'utf8').toString('base64')).to.equal('aGVsbG8='));\n\
+             rq.test('base64 in', () => rq.expect(Buffer.from('aGVsbG8=', 'base64').toString('utf8')).to.equal('hello'));\n\
+             rq.test('hex round trip', () => rq.expect(Buffer.from('616263', 'hex').toString('utf8')).to.equal('abc'));\n\
+             rq.test('gzip round trip', () => rq.expect(zlib.gunzipSync(zlib.gzipSync(Buffer.from('round trip'))).toString('utf8'))\n\
+                 .to.equal('round trip'));\n\
+             rq.test('deflate round trip', () => rq.expect(zlib.inflateSync(zlib.deflateSync(Buffer.from('squeeze'))).toString('utf8'))\n\
+                 .to.equal('squeeze'));\n\
+             rq.test('randomUUID shape', () => rq.expect(crypto.randomUUID()).to.match(/^[0-9a-f]{{8}}-[0-9a-f]{{4}}-4[0-9a-f]{{3}}-[89ab][0-9a-f]{{3}}-[0-9a-f]{{12}}$/));\n\
+             rq.test('randomBytes length', () => rq.expect(crypto.randomBytes(16).length).to.equal(16));\n\
+             rq.test('a vendored package', () => rq.expect(_.chunk([1,2,3,4], 2)).to.deep.equal([[1,2],[3,4]]));\n",
+            stub.base
+        ),
+    );
+    let (_, err, code) = f.run(&["r", "builtins"]);
+    assert_eq!(code, 0, "on the {} engine:\n{err}", engine.label());
+    assert!(
+        err.contains("11/11 test(s) passed"),
+        "on the {} engine:\n{err}",
+        engine.label()
+    );
+}
+
+/// A refused require says WHY — the guided message from the package's own classification,
+/// which travels in the guest bundle — rather than "not found". `require('fs')` cannot work in
+/// a sandbox, and saying so is the difference between a dead end and a decision.
+fn case_a_refused_package_says_why(engine: Engine) {
+    let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new(engine.clone());
+    f.write(
+        "nope",
+        &format!(
+            "---\nurl: {}/x\n---\n\n-- post --\n\nconst fs = require('fs');\n",
+            stub.base
+        ),
+    );
+    let (_, err, _) = f.run(&["r", "nope"]);
+    assert!(
+        err.contains("cannot be used in Safe mode"),
+        "on the {} engine, expected the guided refusal:\n{err}",
+        engine.label()
+    );
+}
+
+// The drivers: each case, on every engine this machine can run.
+
+#[test]
+fn a_post_response_script_really_runs() {
+    for engine in engines() {
+        eprintln!(
+            "── a_post_response_script_really_runs on the {} engine",
+            engine.label()
+        );
+        case_a_post_response_script_really_runs(engine);
+    }
+}
+
+#[test]
+fn a_failing_assertion_fails_the_run() {
+    for engine in engines() {
+        eprintln!(
+            "── a_failing_assertion_fails_the_run on the {} engine",
+            engine.label()
+        );
+        case_a_failing_assertion_fails_the_run(engine);
+    }
+}
+
+#[test]
+fn a_variable_a_script_sets_reaches_the_next_request() {
+    for engine in engines() {
+        eprintln!(
+            "── a_variable_a_script_sets_reaches_the_next_request on the {} engine",
+            engine.label()
+        );
+        case_a_variable_a_script_sets_reaches_the_next_request(engine);
+    }
+}
+
+#[test]
+fn a_pre_request_script_can_change_the_request() {
+    for engine in engines() {
+        eprintln!(
+            "── a_pre_request_script_can_change_the_request on the {} engine",
+            engine.label()
+        );
+        case_a_pre_request_script_can_change_the_request(engine);
+    }
+}
+
+#[test]
+fn a_script_that_throws_is_reported_without_losing_the_response() {
+    for engine in engines() {
+        eprintln!(
+            "── a_script_that_throws_is_reported_without_losing_the_response on the {} engine",
+            engine.label()
+        );
+        case_a_script_that_throws_is_reported_without_losing_the_response(engine);
+    }
+}
+
+#[test]
+fn the_node_builtins_are_the_same_builtins() {
+    for engine in embedded_only() {
+        eprintln!(
+            "── the_node_builtins_are_the_same_builtins on the {} engine",
+            engine.label()
+        );
+        case_the_node_builtins_are_the_same_builtins(engine);
+    }
+}
+
+#[test]
+fn a_refused_package_says_why() {
+    for engine in embedded_only() {
+        eprintln!(
+            "── a_refused_package_says_why on the {} engine",
+            engine.label()
+        );
+        case_a_refused_package_says_why(engine);
+    }
 }
