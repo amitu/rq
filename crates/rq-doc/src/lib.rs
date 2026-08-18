@@ -524,24 +524,16 @@ fn take(map: &mut Mapping, key: &str) -> Option<Value> {
     map.remove(Value::from(key))
 }
 
-/// Coerce a YAML scalar to a string. Numbers and booleans are accepted (and noted) because
-/// `per_page: 5` and `secure: true` are what people actually write; a mapping or sequence
-/// where a scalar belongs is genuinely ambiguous and fails.
+/// Coerce a YAML scalar to a string. Numbers and booleans are accepted **silently** —
+/// `per_page: 5` and `secure: true` are what people actually write, and `5` becomes "5" with
+/// nothing lost, so a note would only teach people to ignore notes. `null` is different: an
+/// empty string is a substitution, not a spelling, so that one is reported. A mapping or
+/// sequence where a scalar belongs is genuinely ambiguous and fails.
 fn scalar(v: &Value, at: &str, notes: &mut Vec<Note>) -> Result<String, String> {
     match v {
         Value::String(s) => Ok(s.clone()),
-        Value::Number(n) => {
-            notes.push(Note(format!(
-                "{at}: number `{n}` read as the string \"{n}\""
-            )));
-            Ok(n.to_string())
-        }
-        Value::Bool(b) => {
-            notes.push(Note(format!(
-                "{at}: boolean `{b}` read as the string \"{b}\""
-            )));
-            Ok(b.to_string())
-        }
+        Value::Number(n) => Ok(n.to_string()),
+        Value::Bool(b) => Ok(b.to_string()),
         Value::Null => {
             notes.push(Note(format!("{at}: null read as an empty string")));
             Ok(String::new())
@@ -905,6 +897,25 @@ rq.test('200 OK', () => rq.response.status === 200);
         // Nothing to report: `per_page: 5` is how a person writes a number, and it becomes
         // "5" exactly.
         assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn notes_report_substitutions_not_spellings() {
+        // Every note is printed on every run, so a note for the ordinary way of writing a
+        // number would teach people to skip reading them. `5` → "5" and `true` → "true" lose
+        // nothing; `null` → "" is a value we made up, and says so.
+        let doc = "---\nmethod: GET\nurl: https://x.invalid/\nquery:\n  per_page: 5\n  \
+                   verbose: true\n---\n";
+        let (parsed, notes) = Document::parse(doc).unwrap();
+        assert_eq!(parsed.front.query[0], ("per_page".into(), "5".into()));
+        assert_eq!(parsed.front.query[1], ("verbose".into(), "true".into()));
+        assert!(notes.is_empty(), "{notes:?}");
+
+        let (_, notes) =
+            Document::parse("---\nmethod: GET\nurl: https://x.invalid/\nquery:\n  q: null\n---\n")
+                .unwrap();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].0.contains("empty string"), "{notes:?}");
     }
 
     #[test]
