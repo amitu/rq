@@ -38,33 +38,28 @@ import {
 // platform-free bridges, and the engine's own vocabulary. Importing them from
 // here — rather than from a sibling host package — is what lets the browser host
 // (ADR-204) run this identical engine.
-import {
-  AsyncRegistry,
-  CORE_GLOBALS_SHIM,
-  DEPRECATION_ISOLATE_SHIM,
-  ON_MESSAGE_TIMEOUT_ERROR,
-  RQ_COLLECT_EXPR,
-  RQ_ISOLATE_SHIM,
-  RQ_ITERATION_RESET_EXPR,
-  RUN_REQUEST_ISOLATE_SHIM,
-  SANDBOX_DEFAULT_TIMEOUT_MS,
-  UserScriptError,
-  buildBatchResult,
-  countScriptLines,
-  createBatchOutcome,
-  createConsoleBridge,
-  createDeprecationBridge,
-  createInMemoryCookieJarBridge,
-  createRunRequestBridge,
-  createTimerBridges,
-  dlog,
-  inflateMutations,
-  marshalToHandle,
-  parseScriptErrorLocation,
-  pendingAsyncCalls,
-  scriptFilenameForPhase,
-  stampMessageIndex,
-} from './index.js';
+// Imported from their defining modules rather than from `./index.js`: that barrel also
+// exports NodeSandbox, whose static `node:vm` import then rides along into every graph
+// that reaches this engine — including the browser host, which this engine exists to
+// be shared with. A barrel that re-enters its own package is how a Node-only
+// dependency ends up in a browser bundle without anyone importing it.
+import { AsyncRegistry } from './async-registry.js';
+import { SANDBOX_DEFAULT_TIMEOUT_MS } from './constants.js';
+import { createInMemoryCookieJarBridge } from './cookies.js';
+import { inflateMutations } from './inflate-mutations.js';
+import { createConsoleBridge } from './isolated/bridges/console-bridge.js';
+import { DEPRECATION_ISOLATE_SHIM, createDeprecationBridge } from './isolated/bridges/deprecation-bridge.js';
+import { RUN_REQUEST_ISOLATE_SHIM, createRunRequestBridge } from './isolated/bridges/run-request-bridge.js';
+import { createTimerBridges } from './isolated/bridges/timer-bridge.js';
+import { CORE_GLOBALS_SHIM } from './isolated/core-globals.js';
+import { dlog } from './isolated/debug-log.js';
+import { RQ_COLLECT_EXPR, RQ_ISOLATE_SHIM, RQ_ITERATION_RESET_EXPR } from './isolated/isolated-rq.js';
+import { marshalToHandle } from './isolated/marshal.js';
+import { pendingAsyncCalls } from './isolated/safe-bridge-factory.js';
+import { ON_MESSAGE_TIMEOUT_ERROR, buildBatchResult, createBatchOutcome, stampMessageIndex } from './on-message-batch.js';
+import { UserScriptError, countScriptLines, parseScriptErrorLocation, scriptFilenameForPhase } from './script-error-location.js';
+import type { SafeBridge } from './isolated/safe-bridge-factory.js';
+import type { BatchOutcome } from './on-message-batch.js';
 import { LogLevel, ScriptPhase } from '../index.js';
 import { StreamHandle } from './stream-handle.js';
 
@@ -73,7 +68,6 @@ import { StreamHandle } from './stream-handle.js';
 // this file's graph (ADR-204).
 import { isScriptPackageUnsupportedError } from './isolated/package-error-sentinel.js';
 
-import type { BatchOutcome, SafeBridge } from './index.js';
 import type { DeprecationEmit, RawScopeMutations, SafePackageResolver } from '../index.js';
 import type { BundleCache } from './isolated/source-bundler.js';
 import type { QuickJSAsyncWASMModule, QuickJSAsyncContext, QuickJSHandle } from 'quickjs-emscripten-core';

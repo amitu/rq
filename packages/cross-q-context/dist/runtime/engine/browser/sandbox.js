@@ -2,7 +2,20 @@ import { EXTERNAL_BUILTIN_PACKAGES } from '../../index.js';
 // The guest realm — shim strings, the bridge factory, the vendor IIFEs — comes
 // from the package neither host owns (ADR-217). A second copy of any of it is how
 // the two surfaces silently become two products.
-import { BUFFER_ISOLATE_SHIM, CONSOLE_ISOLATE_SHIM, CRYPTO_ISOLATE_SHIM, FETCH_ISOLATE_SHIM, PROCESS_ISOLATE_SHIM, STREAM_ISOLATE_SHIM, UTIL_ISOLATE_SHIM, VENDOR_IIFES, ZLIB_ISOLATE_SHIM, createSafeBridge, } from '../index.js';
+// Imported from the defining modules, NOT from `../index.js`: that barrel also exports
+// NodeSandbox, which statically imports `node:vm`, and a static import is not
+// tree-shaken away by every bundler — reaching it from here dragged `node:vm` into
+// the browser graph, which is the exact thing the note above forbids.
+import { CONSOLE_ISOLATE_SHIM } from '../isolated/bridges/console-bridge.js';
+import { PROCESS_ISOLATE_SHIM } from '../isolated/bridges/process-bridge.js';
+import { STREAM_ISOLATE_SHIM } from '../isolated/bridges/stream-bridge.js';
+import { createSafeBridge } from '../isolated/safe-bridge-factory.js';
+import { BUFFER_ISOLATE_SHIM } from '../isolated/shims/buffer.shim.js';
+import { CRYPTO_ISOLATE_SHIM } from '../isolated/shims/crypto.shim.js';
+import { FETCH_ISOLATE_SHIM } from '../isolated/shims/fetch.shim.js';
+import { UTIL_ISOLATE_SHIM } from '../isolated/shims/util.shim.js';
+import { ZLIB_ISOLATE_SHIM } from '../isolated/shims/zlib.shim.js';
+import { VENDOR_IIFES } from '../vendor-codegen/vendor-iifes.js';
 // The residue the Node package still owns: the engine class itself and the
 // require() chain's guest-side data. Reached ONLY via the Node-free `/shared`
 // subpath — the root and `/isolated` both drag `node:*` into a browser bundle.

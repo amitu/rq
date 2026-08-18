@@ -1,7 +1,7 @@
 {
   "name": "@requestly/cross-q-context",
   "version": "0.1.0",
-  "description": "cross-q-context — the API-client scripting core. This build ships the transform pillar: rewrite every script dialect (Postman pm.*/postman.*, Bruno bru.*) to the rq.* API (OXC-based Rust → WebAssembly, strings in / typed objects out). The execute pillar (the safe QuickJS engine) is the app's quickjs-emscripten runtime, absorbed here as JS — not a separate Rust runtime.",
+  "description": "cross-q-context \u2014 the API-client scripting core. This build ships the transform pillar: rewrite every script dialect (Postman pm.*/postman.*, Bruno bru.*) to the rq.* API (OXC-based Rust \u2192 WebAssembly, strings in / typed objects out). The execute pillar (the safe QuickJS engine) is the app's quickjs-emscripten runtime, absorbed here as JS \u2014 not a separate Rust runtime.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -54,7 +54,7 @@
   "scripts": {
     "build:wasm": "wasm-pack build ../../crates/cq-transform --target bundler --out-dir ../../packages/cross-q-context/engine --out-name cross_q_context && wasm-pack build ../../crates/cq-transform --target nodejs --out-dir ../../packages/cross-q-context/engine-node --out-name cross_q_context",
     "build:runtime": "tsc",
-    "test": "node test/smoke.mjs && node test/executor-smoke.mjs && node test/execute-e2e.mjs && node test/engine-streaming.mjs && node test/developer-engine.mjs"
+    "test": "node test/entry-hygiene.mjs && node test/smoke.mjs && node test/executor-smoke.mjs && node test/execute-e2e.mjs && node test/engine-streaming.mjs && node test/developer-engine.mjs"
   },
   "dependencies": {
     "@jitl/quickjs-singlefile-browser-release-asyncify": "^0.32.0",

@@ -1,4 +1,4 @@
-import type { SafeBridge } from '../../index.js';
+import type { SafeBridge } from '../../isolated/safe-bridge-factory.js';
 import type { BodyEncoding, SendRequestHost } from '../../host-types.js';
 /**
  * Local `type` mirrors of the boundary shapes, exactly as the Node bridge declares

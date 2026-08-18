@@ -26,7 +26,7 @@
  * but it no longer means a native-addon quarantine — QuickJS-WASM inlines into any
  * bundle, so the subpath is now just "the Safe engine half" of the package.
  */
-import type { SafeBridge } from './index.js';
+import type { SafeBridge } from './isolated/safe-bridge-factory.js';
 import type { SafePackageResolver } from '../index.js';
 import type { BundleCache } from './isolated/source-bundler.js';
 import type { QuickJSAsyncWASMModule } from 'quickjs-emscripten-core';
