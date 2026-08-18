@@ -1,5 +1,5 @@
 import { EntryType } from './_deps.js';
-import type { ExecutionDirective, RequestHeaderMutation, ScriptExecutionContext, ScriptPhase, TestResult, VisualizerDirective } from './_deps.js';
+import type { ExecutionDirective, RequestHeaderMutation, ScriptExecutionContext, ScriptPhase, RawTestResult, VisualizerDirective } from './_deps.js';
 import type { CookieJarBridge } from './cookies.js';
 import type { AssertionLibs } from './requestResponse.js';
 import type { RunRequestImpl } from './runRequest.js';
@@ -23,7 +23,7 @@ export type RawScopeMutations = {
  * Works in Node.js, web workers, and browsers.
  */
 export declare function createRqNamespace(executionState: {
-    testResults: TestResult[];
+    testResults: RawTestResult[];
     rawMutations: RawScopeMutations;
     requestMutations?: RequestHeaderMutation[];
     executionDirective?: ExecutionDirective;

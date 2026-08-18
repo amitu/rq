@@ -146,11 +146,11 @@ pub struct CollectionMutation {
 
 /// Net variable changes per scope: a value for a set, `null` for an unset.
 ///
-/// **These are the engine's scope names, not the ones in `contract.ts`.** `executeScript`
-/// returns the *inflated* diff from `engine/host-types.ts` — `global`/`runtime`, values as
-/// `VariableData` — while `contract.ts` describes `globals`/`variables` with raw JSON. A
-/// host that mirrored the contract would read an empty `variables` map and silently drop
-/// every `rq.variables.set`, which is why this follows what the engine actually sends.
+/// This mirrors the *inflated* host-facing `MutationDiff` exported from
+/// `@requestly/cross-q-context/runtime` — `global`/`runtime` scopes, values as `VariableData`.
+/// The guest-side shape (`globals`/`variables`, raw JSON) is a different type, named
+/// `RawMutationDiff`; a host that mirrored it would read an empty `variables` map and
+/// silently drop every `rq.variables.set`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MutationDiff {

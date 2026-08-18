@@ -29,9 +29,10 @@ export interface ExecutionMetadata {
     totalEntries: number;
     collectionId: string | null;
 }
-/** The outcome of one `rq.test(...)`. */
+/** The outcome of one `rq.test(...)`, as the guest records it. The host-side union with its
+ * per-status fields is `TestResult` in `engine/host-types.ts`. */
 export type TestStatus = 'passed' | 'failed' | 'skipped';
-export interface TestResult {
+export interface RawTestResult {
     name: string;
     status: TestStatus;
     error?: string;
@@ -51,10 +52,16 @@ export interface LogEntry {
     timestamp?: number;
 }
 /**
- * The net variable changes per scope — `key → new value` for a set, `key → null` for unset/clear.
- * Consumers that need type/secret fidelity inflate this host-side; the runtime emits the raw shape.
+ * The net variable changes per scope, **as the guest records them** — `key → new value` for a set,
+ * `key → null` for unset/clear.
+ *
+ * This is the *pre-inflation* shape and it is not what a host receives. `execute()` returns the
+ * inflated {@link MutationDiff} from `engine/host-types.ts` (scopes `global`/`runtime`, values as
+ * full `VariableData`), which mirrors the app's own type so a host can consume it directly. Both
+ * were once called `MutationDiff`; a host that implemented this one read an empty map and silently
+ * dropped every `rq.variables.set`, which is why the raw one now says that it is raw.
  */
-export interface MutationDiff {
+export interface RawMutationDiff {
     environment?: Record<string, Json>;
     globals?: Record<string, Json>;
     collectionVariables?: Record<string, Json>;
@@ -85,11 +92,16 @@ export type ExecutionDirective = {
 } | {
     kind: 'skip-request';
 };
-/** The result of one `execute` call. */
-export interface ScriptExecutionResult {
-    mutationDiff: MutationDiff;
+/**
+ * The result of one execution **as the guest produces it**, before the host inflates it.
+ *
+ * Not what `execute()` returns: that is the richer {@link ScriptExecutionResult} in
+ * `engine/host-types.ts`, which mirrors the app's type. See {@link RawMutationDiff}.
+ */
+export interface RawScriptExecutionResult {
+    mutationDiff: RawMutationDiff;
     logs: LogEntry[];
-    testResults: TestResult[];
+    testResults: RawTestResult[];
     requestMutationDiff?: RequestMutationDiff;
     executionDirective?: ExecutionDirective;
     error?: string;
@@ -118,8 +130,10 @@ export interface DeprecationSignal {
     /** Did a shim let the call execute (true), or did the access fail/no-op (false)? */
     shimmed: boolean;
 }
-/** Live events emitted during execution: logs + deprecations stream as they happen, result terminal. */
-export type SandboxExecutionEvent = {
+/** Live events during execution, carrying the *raw* result. A host consuming `execute()` gets
+ * `SandboxExecutionEvent` from `engine/host-types.ts`, whose terminal event carries the inflated
+ * result. */
+export type RawSandboxExecutionEvent = {
     type: 'log';
     log: LogEntry;
 } | {
@@ -127,7 +141,7 @@ export type SandboxExecutionEvent = {
     signal: DeprecationSignal;
 } | {
     type: 'result';
-    result: ScriptExecutionResult;
+    result: RawScriptExecutionResult;
 };
 /**
  * Live per-execution host callbacks (NOT serialized — marshaled across the host boundary). The
