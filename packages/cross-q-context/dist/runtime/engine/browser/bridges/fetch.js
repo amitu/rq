@@ -1,4 +1,5 @@
-import { createSafeBridge } from '../../index.js';
+// Defining module, not the engine barrel — see the note in browser/sandbox.ts.
+import { createSafeBridge } from '../../isolated/safe-bridge-factory.js';
 /**
  * Browser fetch bridge — **delegated only** (ADR-204; ADR-181/182 for the
  * delegation mechanism).

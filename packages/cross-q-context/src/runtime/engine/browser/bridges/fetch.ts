@@ -1,6 +1,7 @@
-import { createSafeBridge } from '../../index.js';
+// Defining module, not the engine barrel — see the note in browser/sandbox.ts.
+import { createSafeBridge } from '../../isolated/safe-bridge-factory.js';
 
-import type { SafeBridge } from '../../index.js';
+import type { SafeBridge } from '../../isolated/safe-bridge-factory.js';
 import type {
   BodyEncoding,
   SendRequestHost,
