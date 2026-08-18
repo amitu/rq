@@ -69,9 +69,13 @@ fn parses_postman_transformer_corpus() {
         }
     }
 
-    assert!(
-        total > 0,
-        "corpus dir present but contained no .json fixtures"
+    // Pinned corpus ⇒ pinned size. `> 0` would let a partial fetch pass on a handful of
+    // fixtures and report itself green (see bruno_corpus.rs for the time that happened).
+    const PINNED_FIXTURES: usize = 47;
+    assert_eq!(
+        total, PINNED_FIXTURES,
+        "corpus has {total} .json fixtures, expected {PINNED_FIXTURES} — a partial fetch, or \
+         the pin moved. Re-run tests/corpus/fetch-postman-corpus.sh on a clean dir."
     );
     assert!(
         unexpected.is_empty(),

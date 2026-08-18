@@ -171,7 +171,13 @@ fn realworld_corpus_parses_without_hollow_loss() {
         }
     }
 
-    assert!(files > 0, "corpus present but no collections parsed");
+    // Pinned corpus ⇒ pinned size; `> 0` cannot tell a full fetch from a truncated one.
+    const PINNED_COLLECTIONS: usize = 20;
+    assert_eq!(
+        files, PINNED_COLLECTIONS,
+        "corpus has {files} collections, expected {PINNED_COLLECTIONS} — a partial fetch, or \
+         the pin moved. Re-run tests/corpus/fetch-realworld-corpus.sh on a clean dir."
+    );
     assert!(
         errors.is_empty(),
         "real-world corpus errors:\n  {}",
