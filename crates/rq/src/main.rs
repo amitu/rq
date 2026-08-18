@@ -32,7 +32,7 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Use this project instead of searching upward for __requestly.json.
+    /// Use this project instead of searching upward for rq.toml.
     #[arg(long, global = true, value_name = "DIR")]
     project: Option<PathBuf>,
 

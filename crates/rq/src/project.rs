@@ -5,16 +5,15 @@
 //!
 //! ```text
 //! my-apis/
-//! ├── __requestly.json          project marker
-//! ├── apis/
-//! │   ├── issues/__metadata.md  a request
-//! │   └── github/               a collection
-//! │       ├── __collection.md   its shared headers / auth / vars (optional)
-//! │       └── login/__metadata.md
-//! ├── environments/
-//! │   ├── __global.md
+//! ├── rq.toml            project marker
+//! ├── issues.md          a request — one file, no folder
+//! ├── github/            a collection — just a directory
+//! │   ├── index.md       its shared headers / auth / vars (optional)
+//! │   └── login.md
+//! ├── env/
 //! │   └── staging.md
-//! └── .requestly/state.json     which environment is active (machine-local)
+//! ├── .env               secrets, gitignored
+//! └── .rq/state.json     which environment is active (machine-local)
 //! ```
 //!
 //! The tree *is* the hierarchy: a request's parent collection is the directory above it.
