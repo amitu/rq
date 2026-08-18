@@ -77,15 +77,29 @@ fn bruno_directory_import_has_no_hollow_loss() {
                 && !p.starts_with("environments/")
         })
         .count();
-    assert!(
-        want_requests > 0,
-        "corpus present but no request .bru files found"
+    // The corpus is pinned, so its size is a fact rather than a range. `> 0` was not enough:
+    // a partial fetch (ours was throttled to 16 of 239 files once) leaves a smaller tree that
+    // passes every assertion below — self-consistently, because they all compare the parse
+    // against whatever happens to be on disk. Bump these two with the pin, never to match a
+    // tree you didn't fetch on purpose.
+    const PINNED_REQUESTS: usize = 223;
+    const PINNED_ENVS: usize = 2;
+    assert_eq!(
+        want_requests, PINNED_REQUESTS,
+        "corpus has {want_requests} request .bru files, expected {PINNED_REQUESTS} — a partial \
+         fetch, or the pin moved. Delete tests/corpus/bruno-testbench and re-run the fetch \
+         script; if the pin really changed, update PINNED_REQUESTS."
     );
 
     let want_envs = files
         .keys()
         .filter(|p| p.starts_with("environments/") && p.ends_with(".bru"))
         .count();
+
+    assert_eq!(
+        want_envs, PINNED_ENVS,
+        "corpus has {want_envs} environment .bru files, expected {PINNED_ENVS} — see above"
+    );
 
     let mut report = cq_report::Report::new(cq_report::Fidelity::Lossless);
     let ws = cross_q::bruno::parse_bruno_collection(&files, &mut report).expect("parse bruno dir");

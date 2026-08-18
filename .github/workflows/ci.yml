@@ -1,0 +1,120 @@
+# The gate that would have caught what we shipped red.
+#
+# Two failures reached main because nobody ran the whole suite: a corpus that had been
+# truncated by a throttled fetch (the test compared the parse against whatever was on disk,
+# so a 16-file tree was self-consistently green), and a unit test whose assertion was
+# updated without the code. Both are cheap to catch and expensive to find later, so this
+# runs everything, on every PR, with warnings as errors.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Formatting and lints — fast, so they fail before anyone waits on a full test run.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # cq-transform is vendored — `cargo fmt --all` reformats it wholesale, which buries the
+      # diff that matters. Every other crate is checked.
+      - name: rustfmt
+        run: |
+          for c in cross-q cq-model cq-report cq-wasm rq rq-doc rq-testbed; do
+            cargo fmt -p "$c" --check
+          done
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # The Rust suite, on both platforms rq is meant to ship to.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Corpora are pinned + fetched, never vendored (they carry secret-shaped placeholders).
+      # The corpus tests fail loud when the data is missing AND when it is the wrong size, so
+      # this step failing is a real failure, not a skipped gate.
+      - name: fetch pinned corpora
+        run: |
+          crates/cross-q/tests/corpus/fetch-postman-corpus.sh
+          crates/cross-q/tests/corpus/fetch-realworld-corpus.sh
+          crates/cross-q/tests/corpus/fetch-bruno-corpus.sh
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+  # The MSRV we advertise in Cargo.toml. A claim nobody checks is a claim that drifts.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
+
+  # cross-q-context: the TypeScript runtime and the QuickJS engine, plus the rq↔engine seam.
+  # `dist/` is committed (rq's Node runner loads it directly), so a stale dist is a real bug
+  # — the drift check below is what stops one from being merged.
+  scripts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/cross-q-context
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # No package-lock is committed (it's gitignored), so this is `install`, not `ci`.
+      - run: npm install
+
+      - name: build the runtime
+        run: npm run build:runtime
+
+      - name: dist/ is in sync with src/
+        run: |
+          if ! git diff --quiet -- dist; then
+            echo "::error::dist/ is stale — run 'npm run build:runtime' in packages/cross-q-context and commit the result"
+            git diff --stat -- dist
+            exit 1
+          fi
+
+      - name: engine suites
+        run: npm test
+
+      # The seam rq actually runs on: five scripts through the real QuickJS engine.
+      # RQ_REQUIRE_ENGINE=1 turns the "engine not installed" skip into a failure, which is
+      # the whole point of running it here — this is the one place it can never be skipped.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: rq ↔ engine integration
+        working-directory: .
+        env:
+          RQ_REQUIRE_ENGINE: "1"
+        run: cargo test -p rq --test engine
