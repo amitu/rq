@@ -206,9 +206,18 @@ fn emit_request(
     match &req.protocol {
         Protocol::Http(http) => {
             doc.front.method = Some(String::from(http.method.clone()));
-            doc.front.url = Some(http.url.raw.clone());
             doc.front.headers = kv_pairs(&http.headers, &rel, report);
             doc.front.query = kv_pairs(&http.query, &rel, report);
+            // The IR carries the query BOTH ways — parsed into `query`, and still present in
+            // `url.raw`, because that is what the source formats hand over. rq's `query:`
+            // block is *appended* to `url:` (RQ-FORMAT), so emitting both sent every
+            // imported request out as `?page=1&page=1`. The parsed pairs are the ones with
+            // names, so they win and the raw copy is dropped.
+            doc.front.url = Some(if doc.front.query.is_empty() {
+                http.url.raw.clone()
+            } else {
+                strip_query(&http.url.raw)
+            });
             doc.front.path_vars = http
                 .path_variables
                 .iter()
@@ -365,6 +374,18 @@ fn apply_body(doc: &mut Document, body: &Body, rel: &str, report: &mut Report) {
                 graphql_body(query, variables, operation_name.as_deref()),
             );
         }
+    }
+}
+
+/// `https://x/y?a=1#frag` → `https://x/y#frag`. Only the query goes; a fragment is not a
+/// query parameter and rq does not synthesise one.
+fn strip_query(raw: &str) -> String {
+    let Some(q) = raw.find('?') else {
+        return raw.to_string();
+    };
+    match raw[q..].find('#') {
+        Some(h) => format!("{}{}", &raw[..q], &raw[q + h..]),
+        None => raw[..q].to_string(),
     }
 }
 

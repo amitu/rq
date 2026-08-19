@@ -120,6 +120,21 @@ brings a collection in, and `cq convert ./my-apis --to bruno` takes it anywhere 
 
 Full spec: [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md).
 
+**You do not have to convert anything to start.** `rq` reads a Postman export, a Bruno
+collection or a file of curl commands *in place* — the same converter, run in memory,
+writing nothing:
+
+```bash
+rq l acme.postman_collection.json      # its requests, as a tree
+rq r health                            # run one
+rq --project ./bruno-collection l      # a directory works the same way
+```
+
+Drop into a folder that has one and bare `rq` finds it. Nothing is written to that folder —
+no project marker, no `.rq/`, no converted copies — so a collection someone sent you is
+runnable before you have decided whether to keep it. When you do decide, `rq import <file>`
+writes the project out, and it is the same conversion you were already running.
+
 **Scripts run.** `-- pre --` and `-- post --` execute on
 [cross-q-context](packages/cross-q-context) — the same QuickJS engine and the same `rq.*`
 API the Requestly app uses, so a collection behaves the same in both. `rq.test(…)` results

@@ -19,15 +19,19 @@
 //! The tree *is* the hierarchy: a request's parent collection is the directory above it.
 //! Nothing stores a parent id, so `git mv` is a legal way to reorganize a collection.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::doc::{Document, Note};
 
 // The layout itself is defined in `rq-doc`, so the converter writes the same tree the CLI
 // reads. Re-exported here because this is where the rest of the CLI looks for it.
 pub use rq_doc::layout::{COLLECTION_FILE, DOTENV, ENVS_DIR, MARKER, STATE_DIR};
+
+/// A tree child: the name as written, and where its document lives.
+type Named = (String, PathBuf);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -77,6 +81,29 @@ impl Entry {
     }
 }
 
+/// Where a project's documents come from.
+///
+/// `Converted` is what makes `rq ./collection.postman_collection.json` work. cross-q turns
+/// the foreign file into the very markdown an rq project on disk would hold, and the tree is
+/// built from that map instead of from `read_dir`. Nothing downstream — running, inheritance,
+/// the console, `--json` — can tell the difference, because there is no difference: it is the
+/// same converter `rq import` runs, minus the writing.
+#[derive(Debug)]
+pub enum Source {
+    /// Files on disk, below `root`.
+    Disk,
+    /// A converted foreign collection, held in memory. Reads never touch the disk, so the
+    /// original file is never at risk and nothing is left behind.
+    Converted {
+        /// The file or directory it was read from — for messages, and for `rq e`.
+        from: PathBuf,
+        /// What cross-q decided it was: `postman`, `bruno`, `curl`, `rq`.
+        format: String,
+        /// Absolute virtual path → contents.
+        files: BTreeMap<PathBuf, String>,
+    },
+}
+
 #[derive(Debug)]
 pub struct Project {
     pub root: PathBuf,
@@ -86,6 +113,8 @@ pub struct Project {
     /// Files that looked like requests but weren't usable — reported, never silently
     /// skipped.
     pub notes: Vec<String>,
+    /// Disk, or a foreign collection converted in memory.
+    pub source: Source,
 }
 
 /// What a `.md` file in a project turned out to be.
@@ -96,8 +125,8 @@ enum Classification {
     Unusable(String),
 }
 
-fn classify(path: &Path) -> Classification {
-    let Ok(text) = std::fs::read_to_string(path) else {
+fn classify(text: Option<String>) -> Classification {
+    let Some(text) = text else {
         return Classification::Unusable("could not be read".into());
     };
     if !text.trim_start().starts_with("---") {
@@ -126,10 +155,95 @@ fn display_rel(prefix: &str, name: &str) -> String {
     join(prefix, name)
 }
 
+/// Collections lying about that rq could read directly, sorted by name.
+///
+/// Only files cross-q positively identifies count — a Postman export says so in its own
+/// `info`/`_postman_id`, a `.bru` says `meta {`. A folder of unrelated JSON is not a project
+/// and does not become one by being looked at.
+pub fn readable_collections(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && !p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with('.'))
+        })
+        .filter(|p| {
+            // Read only what could plausibly be one; `detect_format` needs the text, and a
+            // 200 MB video is not a collection.
+            std::fs::metadata(p)
+                .map(|m| m.len() < 32 * 1024 * 1024)
+                .unwrap_or(false)
+                && std::fs::read_to_string(p)
+                    .ok()
+                    .and_then(|text| crate::import::detect_format(p, &text))
+                    .is_some()
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 impl Project {
     /// Locate the project: an explicit `--project`, then `RQ_PROJECT`, then the marker
-    /// walking up from `start`.
+    /// walking up from `start` — and failing all of that, a collection sitting right here
+    /// that rq can read without being asked twice.
     pub fn find(explicit: Option<&Path>, start: &Path) -> Result<Project> {
+        Project::locate(explicit, start, None).map(|(p, _)| p)
+    }
+
+    /// `find`, plus the conversion report when the project turned out to be a foreign
+    /// collection — what the converter had to say about reading it.
+    pub fn locate(
+        explicit: Option<&Path>,
+        start: &Path,
+        format: Option<&str>,
+    ) -> Result<(Project, Option<cq_report::Report>)> {
+        // An explicit target that is a file is never an rq project directory — it is the
+        // collection itself, which is exactly what `--project foo.postman_collection.json`
+        // is asking for.
+        if let Some(p) = explicit {
+            if p.is_file() || (p.is_dir() && !p.join(MARKER).is_file()) {
+                let (project, report) = Project::open_foreign(p, format)?;
+                return Ok((project, Some(report)));
+            }
+        }
+        Project::find_on_disk(explicit, start)
+            .map(|p| (p, None))
+            .or_else(|e| {
+                // Nothing of ours here. Before failing, look for something we can read anyway.
+                match readable_collections(start).as_slice() {
+                    [] => Err(e),
+                    [one] => {
+                        let (project, report) = Project::open_foreign(one, format)?;
+                        Ok((project, Some(report)))
+                    }
+                    many => bail!(
+                        "no rq project here, but {} collections rq can read:\n{}\n  \
+                     name one — `rq l <file>` — or `rq import <file>` to make it a project",
+                        many.len(),
+                        many.iter()
+                            .map(|p| format!(
+                                "    {}",
+                                p.file_name().unwrap_or_default().to_string_lossy()
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                }
+            })
+    }
+
+    /// Strictly a project on disk — the marker, or nothing. Writers use this: `rq curl
+    /// --save-as` and `rq import` need somewhere to put a file, and a collection rq is
+    /// merely reading is not that.
+    pub fn find_on_disk(explicit: Option<&Path>, start: &Path) -> Result<Project> {
         let root = if let Some(p) = explicit {
             let p = p.to_path_buf();
             if !p.join(MARKER).is_file() {
@@ -161,35 +275,128 @@ impl Project {
     }
 
     pub fn open(root: PathBuf) -> Result<Project> {
+        Project::build(root, Source::Disk)
+    }
+
+    /// Open a foreign collection — a Postman export, a Bruno tree, a curl file — **in place**.
+    ///
+    /// No temporary directory, no files written next to someone's download: cross-q converts
+    /// it to the rq project it describes and that map *is* the project. `format` forces the
+    /// reader when the file is ambiguous; `None` lets cross-q decide by looking.
+    pub fn open_foreign(from: &Path, format: Option<&str>) -> Result<(Project, cq_report::Report)> {
+        let mut report = cq_report::Report::new(cq_report::Fidelity::Lossless);
+        let (map, format) = crate::import::to_project_map(from, format, &mut report)?;
+        // The source path doubles as the project root. For a file that is a path with no
+        // directory at it — deliberately, so a scan can never wander into whatever else
+        // happens to sit in the same folder.
+        let root = from.to_path_buf();
+        let files = map
+            .into_iter()
+            .map(|(rel, content)| (root.join(rel), content))
+            .collect();
+        let project = Project::build(
+            root,
+            Source::Converted {
+                from: from.to_path_buf(),
+                format,
+                files,
+            },
+        )?;
+        Ok((project, report))
+    }
+
+    fn build(root: PathBuf, source: Source) -> Result<Project> {
         let mut project = Project {
             root,
             entries: Vec::new(),
             roots: Vec::new(),
             notes: Vec::new(),
+            source,
         };
         let root = project.root.clone();
         project.roots = project.scan(&root, None, "")?;
         Ok(project)
     }
 
-    fn scan(&mut self, dir: &Path, parent: Option<usize>, prefix: &str) -> Result<Vec<usize>> {
-        let mut dirs: Vec<(String, PathBuf)> = Vec::new();
-        let mut files: Vec<(String, PathBuf)> = Vec::new();
+    /// True when this project was converted rather than read from disk.
+    pub fn is_converted(&self) -> bool {
+        matches!(self.source, Source::Converted { .. })
+    }
 
-        for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            if entry.file_type()?.is_dir() {
-                if !rq_doc::layout::is_reserved_dir(&name) {
-                    dirs.push((name, entry.path()));
+    /// What a converted project came from, and what cross-q read it as.
+    pub fn converted_from(&self) -> Option<(&Path, &str)> {
+        match &self.source {
+            Source::Converted { from, format, .. } => Some((from.as_path(), format.as_str())),
+            Source::Disk => None,
+        }
+    }
+
+    /// Read one of the project's documents, wherever they live.
+    fn read(&self, path: &Path) -> Option<String> {
+        match &self.source {
+            Source::Disk => std::fs::read_to_string(path).ok(),
+            Source::Converted { files, .. } => files.get(path).cloned(),
+        }
+    }
+
+    /// Does this document exist? `is_file()` on disk; a key in the map when converted.
+    fn has(&self, path: &Path) -> bool {
+        match &self.source {
+            Source::Disk => path.is_file(),
+            Source::Converted { files, .. } => files.contains_key(path),
+        }
+    }
+
+    /// The immediate children of a directory: `(subdirectories, request files)`. Converted
+    /// projects have no directories to read, so the tree is recovered from the map's keys.
+    fn list(&self, dir: &Path) -> Result<(Vec<Named>, Vec<Named>)> {
+        let mut dirs: Vec<Named> = Vec::new();
+        let mut files: Vec<Named> = Vec::new();
+
+        match &self.source {
+            Source::Disk => {
+                for entry in
+                    std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))?
+                {
+                    let entry = entry?;
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if entry.file_type()?.is_dir() {
+                        if !rq_doc::layout::is_reserved_dir(&name) {
+                            dirs.push((name, entry.path()));
+                        }
+                    } else if rq_doc::layout::is_request_file(&name) {
+                        files.push((name, entry.path()));
+                    }
                 }
-            } else if rq_doc::layout::is_request_file(&name) {
-                files.push((name, entry.path()));
+            }
+            Source::Converted { files: map, .. } => {
+                let mut seen_dirs = std::collections::BTreeSet::new();
+                for path in map.keys() {
+                    let Ok(rest) = path.strip_prefix(dir) else {
+                        continue;
+                    };
+                    let mut parts = rest.components();
+                    let Some(first) = parts.next() else { continue };
+                    let name = first.as_os_str().to_string_lossy().to_string();
+                    if parts.next().is_some() {
+                        // Something below a subdirectory: the subdirectory is the child.
+                        if !rq_doc::layout::is_reserved_dir(&name) && seen_dirs.insert(name.clone())
+                        {
+                            dirs.push((name, dir.join(first)));
+                        }
+                    } else if rq_doc::layout::is_request_file(&name) {
+                        files.push((name, path.clone()));
+                    }
+                }
             }
         }
         dirs.sort_by(|a, b| a.0.cmp(&b.0));
         files.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok((dirs, files))
+    }
 
+    fn scan(&mut self, dir: &Path, parent: Option<usize>, prefix: &str) -> Result<Vec<usize>> {
+        let (dirs, files) = self.list(dir)?;
         let mut out = Vec::new();
 
         // Requests first: a directory listing reads better when the things you can run come
@@ -200,7 +407,7 @@ impl Project {
             };
             // A markdown file with no frontmatter is documentation — a README next to the
             // requests it describes, which is the point of keeping them in one directory.
-            match classify(&path) {
+            match classify(self.read(&path)) {
                 Classification::Request => {}
                 Classification::Documentation => continue,
                 Classification::Unusable(why) => {
@@ -228,7 +435,8 @@ impl Project {
             let index = path.join(COLLECTION_FILE);
             // A collection's index may be a request in its own right: the landing page you
             // get by naming the collection.
-            let runnable = index.is_file() && matches!(classify(&index), Classification::Request);
+            let runnable =
+                self.has(&index) && matches!(classify(self.read(&index)), Classification::Request);
             let idx = self.entries.len();
             self.entries.push(Entry {
                 kind: Kind::Collection,
@@ -332,7 +540,20 @@ impl Project {
 
     pub fn load(&self, idx: usize) -> Result<(Document, Vec<Note>)> {
         let path = self.entries[idx].file();
-        load_document(&path)
+        self.parse(&path)
+    }
+
+    /// Parse one document from wherever this project keeps it.
+    fn parse(&self, path: &Path) -> Result<(Document, Vec<Note>)> {
+        match &self.source {
+            Source::Disk => load_document(path),
+            Source::Converted { .. } => {
+                let text = self
+                    .read(path)
+                    .ok_or_else(|| anyhow!("{} is not in this collection", path.display()))?;
+                Document::parse(&text).map_err(|e| anyhow!("{}: {e}", path.display()))
+            }
+        }
     }
 
     /// The project's own `index.md`: what every request in it shares.
@@ -341,19 +562,19 @@ impl Project {
     /// the tree to hang from — so it is read from here.
     pub fn root_collection(&self) -> Result<Option<(Document, Vec<Note>)>> {
         let path = self.root.join(COLLECTION_FILE);
-        if !path.is_file() {
+        if !self.has(&path) {
             return Ok(None);
         }
-        load_document(&path).map(Some)
+        self.parse(&path).map(Some)
     }
 
     /// A collection's own `__collection.md`, if it wrote one.
     pub fn load_collection(&self, idx: usize) -> Result<Option<(Document, Vec<Note>)>> {
         let path = self.entries[idx].file();
-        if !path.is_file() {
+        if !self.has(&path) {
             return Ok(None);
         }
-        load_document(&path).map(Some)
+        self.parse(&path).map(Some)
     }
 
     /// Everything that can be run, in tree order.
@@ -367,19 +588,30 @@ impl Project {
         self.root.join(ENVS_DIR)
     }
 
-    /// Environment names on disk, global first, then alphabetical.
+    /// Environment names, global first, then alphabetical. A converted collection brings its
+    /// own environments along — a Bruno tree has them in the same import, so they are here
+    /// for the same reason they would be after `rq import`.
     pub fn environments(&self) -> Vec<String> {
-        let mut names: Vec<String> = match std::fs::read_dir(self.env_dir()) {
-            Ok(rd) => rd
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
-                .filter_map(|e| {
-                    e.path()
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                })
+        let dir = self.env_dir();
+        let mut names: Vec<String> = match &self.source {
+            Source::Disk => match std::fs::read_dir(&dir) {
+                Ok(rd) => rd
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+                    .filter_map(|e| {
+                        e.path()
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            },
+            Source::Converted { files, .. } => files
+                .keys()
+                .filter(|p| p.parent() == Some(dir.as_path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "md"))
+                .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
                 .collect(),
-            Err(_) => Vec::new(),
         };
         names.sort();
         names
@@ -393,7 +625,7 @@ impl Project {
     /// one `vars:` block — so there is one parser and one set of rules to learn.
     pub fn load_env(&self, name: &str) -> Result<(Document, Vec<Note>)> {
         let path = self.env_path(name);
-        if !path.is_file() {
+        if !self.has(&path) {
             let known = self.environments();
             bail!(
                 "no environment `{name}` in {}{}",
@@ -405,14 +637,14 @@ impl Project {
                 }
             );
         }
-        load_document(&path)
+        self.parse(&path)
     }
 
     /// The always-on variable layer: `KEY=value` lines from `.env`, `#` comments and an
     /// optional `export ` allowed. Absent is simply empty — a project with one set of
     /// values needs nothing else.
     pub fn dotenv(&self) -> Vec<(String, String)> {
-        let Ok(text) = std::fs::read_to_string(self.root.join(DOTENV)) else {
+        let Some(text) = self.read(&self.root.join(DOTENV)) else {
             return Vec::new();
         };
         text.lines()
@@ -438,12 +670,26 @@ impl Project {
     /// The active environment. Machine-local (under `.requestly/`, gitignored) because
     /// "which environment am I pointed at" is a property of your shell, not of the repo.
     pub fn active_env(&self) -> Option<String> {
+        if self.is_converted() {
+            return None;
+        }
         let text = std::fs::read_to_string(self.state_path()).ok()?;
         let json: serde_json::Value = serde_json::from_str(&text).ok()?;
         json.get("environment")?.as_str().map(str::to_string)
     }
 
     pub fn set_active_env(&self, name: Option<&str>) -> Result<()> {
+        // A converted collection has no directory of ours to remember anything in, and
+        // scattering an `.rq/` beside somebody's download to record a preference would be
+        // taking a liberty. Per-run `-e` still selects one.
+        if let Some((from, _)) = self.converted_from() {
+            bail!(
+                "{} is read directly, so there is nowhere to save an active environment\n  \
+                 use `-e <name>` per run, or `rq import {}` to make it a project",
+                from.display(),
+                from.display()
+            );
+        }
         let dir = self.root.join(STATE_DIR);
         std::fs::create_dir_all(&dir)?;
         let body = match name {

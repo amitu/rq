@@ -111,6 +111,40 @@ fn a_postman_collection_becomes_a_tree_and_keeps_its_scripts_verbatim() {
 }
 
 #[test]
+fn a_query_string_is_emitted_once_not_twice() {
+    // The IR carries a query BOTH parsed into `query` and still sitting in `url.raw`, which
+    // is what the source formats hand over. rq *appends* `query:` to `url:`, so emitting
+    // both sent every imported request out as `?page=1&page=1` — a wrong URL on the wire,
+    // silently, for anything imported with a query string.
+    let (map, _) = to_project(
+        "postman",
+        r#"{
+          "info": { "name": "Q", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+          "item": [{ "name": "search", "request": { "method": "GET",
+            "url": { "raw": "https://x.test/s?page=1&q=cats" } } }]
+        }"#,
+    );
+    let doc = map
+        .iter()
+        .find(|(k, _)| k.ends_with("search.md"))
+        .map(|(_, v)| v.clone())
+        .expect("the request was emitted");
+    assert!(
+        doc.contains("url: https://x.test/s\n"),
+        "the url kept its query string, so it will be appended twice:\n{doc}"
+    );
+    assert!(
+        doc.contains("page: '1'") && doc.contains("q: cats"),
+        "{doc}"
+    );
+
+    // And the round trip still knows the whole URL.
+    let (ws, _) = reread(&map);
+    let names = request_names(&ws);
+    assert_eq!(names.len(), 1, "{names:?}");
+}
+
+#[test]
 fn an_unsendable_auth_is_preserved_and_reported_not_stripped() {
     let collection = serde_json::json!({
         "info": { "name": "A", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
