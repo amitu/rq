@@ -375,6 +375,73 @@ fn case_script_dialect_is_something_you_can_write(engine: Engine) {
     assert!(err.contains("1/1 test(s) passed"), "{err}");
 }
 
+/// A Bruno collection's scripts, running unmodified.
+///
+/// Bruno is reconciled by a runtime shim rather than a source rewrite — `bru`/`req`/`res` are
+/// objects, so they can simply exist — and this is the proof that the mapping reaches all the
+/// way through: a variable set in `script:pre-request` becomes a header on the wire, and the
+/// `tests {}` block's bare `test`/`expect` assert against the real response.
+fn case_a_bruno_script_runs_unmodified(engine: Engine) {
+    let stub = Stub::start(1, |_| (200, "OK", "{\"ok\":true}".into()));
+    let f = Fixture::new(engine.clone());
+    let c = f.dir.path().join("collection");
+    std::fs::create_dir_all(&c).unwrap();
+    std::fs::write(
+        c.join("bruno.json"),
+        r#"{ "version": "1", "name": "demo", "type": "collection" }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        c.join("thing.bru"),
+        format!(
+            "meta {{\n  name: thing\n  type: http\n}}\n\
+             get {{\n  url: {}/thing\n}}\n\
+             script:pre-request {{\n  \
+               bru.setVar(\"who\", \"amitu\");\n  \
+               req.setHeader(\"X-From\", bru.getVar(\"who\"));\n}}\n\
+             script:post-response {{\n  \
+               bru.setEnvVar(\"last_status\", String(res.getStatus()));\n}}\n\
+             tests {{\n  \
+               test(\"status is 200\", function () {{ expect(res.getStatus()).to.equal(200); }});\n  \
+               test(\"body came through\", function () {{ expect(res.getBody().ok).to.equal(true); }});\n\
+             }}\n",
+            stub.base
+        ),
+    )
+    .unwrap();
+
+    let (_, err, code) = f.run(&["--project", "./collection", "r", "thing"]);
+    assert_eq!(code, 0, "on the {} engine:\n{err}", engine.label());
+    assert!(err.contains("2/2 test(s) passed"), "{err}");
+    // The pre-request script's header actually left the process.
+    assert_eq!(stub.next().header("x-from"), Some("amitu"));
+}
+
+/// A Bruno API rq has not implemented **throws, by name**.
+///
+/// The alternative — returning `undefined` and carrying on — turns a missing feature into a
+/// wrong answer three lines later, which is the single failure mode this project is organised
+/// against. Better to stop at the call that cannot work.
+fn case_an_unimplemented_bruno_api_says_so(engine: Engine) {
+    let stub = Stub::start(1, |_| (200, "OK", "{}".into()));
+    let f = Fixture::new(engine.clone());
+    f.write(
+        "thing",
+        &format!(
+            "---\nurl: {}/thing\nscript_dialect: bru\n---\n\n-- post --\n\n\
+             bru.interpolate('{{{{x}}}}');\n",
+            stub.base
+        ),
+    );
+
+    let (_, err, _) = f.run(&["r", "thing"]);
+    assert!(
+        err.contains("bru.interpolate()") && err.contains("rather than continuing"),
+        "on the {} engine, the failure should name the call:\n{err}",
+        engine.label()
+    );
+}
+
 // The drivers: each case, on every engine this machine can run.
 
 #[test]
@@ -484,5 +551,27 @@ fn script_dialect_is_something_you_can_write() {
             engine.label()
         );
         case_script_dialect_is_something_you_can_write(engine);
+    }
+}
+
+#[test]
+fn a_bruno_script_runs_unmodified() {
+    for engine in engines() {
+        eprintln!(
+            "── a_bruno_script_runs_unmodified on the {} engine",
+            engine.label()
+        );
+        case_a_bruno_script_runs_unmodified(engine);
+    }
+}
+
+#[test]
+fn an_unimplemented_bruno_api_says_so() {
+    for engine in engines() {
+        eprintln!(
+            "── an_unimplemented_bruno_api_says_so on the {} engine",
+            engine.label()
+        );
+        case_an_unimplemented_bruno_api_says_so(engine);
     }
 }

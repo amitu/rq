@@ -39,6 +39,9 @@ export { FETCH_ISOLATE_SHIM } from './isolated/shims/fetch.shim.js';
 export { UTIL_ISOLATE_SHIM } from './isolated/shims/util.shim.js';
 export { ZLIB_ISOLATE_SHIM } from './isolated/shims/zlib.shim.js';
 export { RQ_ISOLATE_SHIM, RQ_ITERATION_RESET_EXPR, RQ_COLLECT_EXPR } from './isolated/isolated-rq.js';
+// Bruno's `bru`/`req`/`res` mapped onto the rq namespace — a shim, not a transform, because
+// Bruno has no syntax-level forms to rewrite. See the file for the full argument.
+export { BRU_ISOLATE_SHIM } from './isolated/shims/bru.shim.js';
 // The require chain — REQUIRE_ISOLATE_SHIM (guest require) over resolveRequire (the built-in /
 // bridge / VENDOR_IIFES / SOURCE_BUNDLE tiers), the rollup source-bundler for user npm packages,
 // the shim order, and the package-error sentinel (relocated Node-free off vm-package-evaluator).

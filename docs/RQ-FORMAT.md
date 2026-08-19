@@ -439,8 +439,16 @@ runtime still sees one API.
 This is a document field, not an import artefact: writing it by hand is supported and is the
 short way to run a script you pasted out of Postman.
 
-`bru` is recorded but not yet translated; such a script runs as written, says so, and will
-fail if it actually uses `bru.*`.
+`bru` runs too, by a different route: `bru`, `req` and `res` are objects, so the runtime
+provides them rather than rewriting anything — including for aliased use (`const b = bru`)
+that a source rewrite would miss. Postman needs the rewrite because its v1 forms are *syntax*
+(`tests['ok'] = expr` is an assignment; no object can intercept it); Bruno has none.
+
+The Bruno surface is the one usebruno's own test collection uses — `bru.setVar`/`getVar`, the
+env / global / collection scopes, `bru.cookies`, `setNextRequest`, `sendRequest`, and `req`/`res`
+including `headerList`, `getBody`, `getStatus`. A `tests {}` block's bare `test`/`expect` work.
+Anything outside that surface **throws by name** (`bru.interpolate() is a Bruno API rq does not
+implement yet`) instead of returning `undefined` and making the following line quietly wrong.
 
 ### Checking and formatting
 

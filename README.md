@@ -86,8 +86,14 @@ Two things keep this from becoming an N×M translation matrix:
   every run reconciles the source through [`crates/cq-transform`](crates/cq-transform), an
   OXC-based transform that parses the script and rewrites identifiers *in scope* rather than
   string-replacing `pm.` and hoping. `pm.*`, the legacy `postman.setEnvironmentVariable(…)`,
-  and v1's `tests['x'] = …` / `responseCode` / `responseBody` all work. Bruno's `bru.*` does
-  not yet — see [Not built yet](#not-built-yet).
+  and v1's `tests['x'] = …` / `responseCode` / `responseBody` all work.
+
+  **A Bruno script runs unmodified too**, by the other route: `bru`, `req` and `res` are
+  *objects*, so the runtime simply provides them. Postman needs a rewrite because its v1 forms
+  are syntax — `tests['ok'] = expr` is an assignment no object can intercept — while Bruno has
+  nothing to rewrite. The mapped surface is the one usebruno's own 223-request collection
+  actually uses; anything outside it throws **by name** rather than returning `undefined` and
+  making the next line wrong.
 
 ## The `rq` CLI
 
@@ -261,11 +267,6 @@ that do run in a terminal.
 ## Not built yet
 
 Named here so nobody has to find out by trying. Roughly in the order they matter:
-
-**Bruno scripts.** `bru.*` does not run. Postman does — see below — but Bruno needs a
-platform in `crates/cq-transform` (its `Platform` enum has one variant today) and the
-matching runtime surface. A `bru.*` script is carried into the file, recorded as
-`script_dialect: bru`, and says so before it fails rather than failing mysteriously.
 
 **Running.**
 - data-driven iteration (`-d data.csv`, `-n 5`) and a JUnit reporter — the runtime already
