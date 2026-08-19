@@ -416,7 +416,8 @@ fn add_scripts(doc: &mut Document, scripts: &Scripts, rel: &str, report: &mut Re
                 provenance(rel),
                 format!(
                     "`-- {section} --` is written in the {:?} dialect and was kept verbatim \
-                     (rq's runtime reconciles it; the converter never renames a script)",
+                     (the converter never renames a script). rq executes rq.* — running this \
+                     one needs the dialect transform, which is not wired up yet",
                     script.dialect
                 ),
             );

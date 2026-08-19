@@ -77,9 +77,14 @@ Two things keep this from becoming an N×M translation matrix:
   `[Asserts]`. cross-q lifts those into **first-class IR** (`asserts`, `vars`), so they convert
   with **zero** JS translation.
 - **Translate through one runtime, not per-pair.** Actually *executing* or transpiling across
-  dialects is the job of [`cross-q-context`](docs/CONTEXT.md) — a QuickJS `rq.*` runtime with
-  `pm.*`-compatible shims — not the converter. The converter carries source + dialect; the
-  runtime reconciles them.
+  dialects is the job of [`cross-q-context`](docs/CONTEXT.md) — a QuickJS `rq.*` runtime plus
+  a `pm.*` → `rq.*` transform — not the converter. The converter carries source + dialect.
+
+  **Today that reconciliation is not wired into `rq`.** `rq` executes `rq.*`, which is what its
+  own `-- pre --`/`-- post --` blocks are written in; a `pm.*` or `bru.*` script that came in
+  from a conversion is carried into the file faithfully and then fails at run time with
+  `pm is not defined`. The transform exists (`crates/cq-transform`, Postman only) and is not
+  called yet. See [Not built yet](#not-built-yet).
 
 ## The `rq` CLI
 
@@ -249,6 +254,39 @@ and the response wasn't 2xx, **2** for anything rq itself couldn't do.
 
 `--no-console` turns off the interactive layer anywhere, for recordings and for scripts
 that do run in a terminal.
+
+## Not built yet
+
+Named here so nobody has to find out by trying. Roughly in the order they matter:
+
+**Scripting across dialects.** `rq` runs `rq.*`. A converted collection's `pm.*` (Postman) or
+`bru.*` (Bruno) script is carried verbatim — deliberately; a textual rename imports clean and
+throws later — but nothing transforms it before execution yet, so it throws `pm is not defined`
+at run time. The Postman transform exists in `crates/cq-transform` and simply is not called;
+the emitted document also does not record which dialect a section is in, which is the first
+thing to fix. Bruno needs more: there is no `bru.*` platform in the transform and no `bru`
+runtime shim.
+
+**Running.**
+- data-driven iteration (`-d data.csv`, `-n 5`) and a JUnit reporter — the runtime already
+  carries `iteration`/`iteration_count`/`iteration_data` into every script, so this is CLI
+  plumbing over an engine that is ready for it
+- saved response examples — a fidelity gap in both directions today (the model carries
+  `examples`, `rq` drops them), and the thing that would make offline runs and `rq diff`
+  possible
+- retries and backoff; proxies and client certificates
+
+**Rendering.** Terminal-width-aware tables: columns are sized to their content, so a table
+with long cells is wider than an 80-column window and wraps. Nothing is truncated.
+
+**Formats.** OpenAPI/Swagger, Insomnia, HAR, Hoppscotch, `.http`, Hurl — see the table above.
+Requestly is export-only; `curl` has no exporter.
+
+**Packaging.** No release binaries, no Homebrew tap, no apt repo. `rq` is also taken on
+crates.io, so publishing means a different crate name with `[[bin]] name = "rq"`.
+
+**Not planned:** an editor. `rq e` hands the file to `$EDITOR`, and that is the whole feature —
+see [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md#not-planned-editing).
 
 ## Docs
 

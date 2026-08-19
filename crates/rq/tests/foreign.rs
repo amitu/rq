@@ -319,3 +319,68 @@ fn a_corrupt_collection_says_which_file_and_why() {
     assert!(text.contains("acme.postman_collection.json"), "{text}");
     assert!(text.contains("JSON"), "{text}");
 }
+
+/// A foreign-dialect script is carried faithfully and **does not run** — rq executes `rq.*`,
+/// and nothing transforms `bru.*`/`pm.*` before execution yet.
+///
+/// This test exists to pin the two things that ARE guaranteed today: the failure is reported
+/// rather than swallowed, and it does not cost the response. When the dialect transform is
+/// wired up this test will fail — that is the point, and the fix is to assert the script's
+/// effect instead of its absence.
+#[test]
+fn a_foreign_dialect_script_is_reported_not_silently_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(1, |_| (200, "OK", "{\"ok\":true}".into()));
+    let c = dir.path().join("collection");
+    std::fs::create_dir_all(&c).unwrap();
+    std::fs::write(
+        c.join("bruno.json"),
+        r#"{ "version": "1", "name": "d", "type": "collection" }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        c.join("get.bru"),
+        format!(
+            "meta {{\n  name: get\n  type: http\n}}\nget {{\n  url: {}/thing\n}}\n\
+             script:post-response {{\n  bru.setVar(\"seen\", \"yes\");\n}}\n",
+            stub.base
+        ),
+    )
+    .unwrap();
+
+    // The engine compiled into the binary, not the pinned-off one the other cases use: this
+    // case is about what the engine does with a script it cannot understand.
+    let out = Command::new(BIN)
+        .args([
+            "--project",
+            "./collection",
+            "r",
+            "get",
+            "--color=never",
+            "--no-console",
+        ])
+        .current_dir(dir.path())
+        .env_remove("RQ_PROJECT")
+        .env_remove("RQ_SCRIPT_ENGINE")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("running rq");
+    let code = out.status.code().unwrap_or(-1);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // The request still happened and its body still came back.
+    assert_eq!(
+        code, 0,
+        "a script failure must not cost the response:\n{text}"
+    );
+    assert_eq!(stub.next().path, "/thing");
+    assert!(text.contains("ok"), "{text}");
+    // And the script's failure is on the record.
+    assert!(
+        text.contains("bru is not defined"),
+        "the failure should be reported, not swallowed:\n{text}"
+    );
+}
