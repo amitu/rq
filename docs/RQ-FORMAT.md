@@ -421,6 +421,31 @@ Named so you don't have to discover it:
   narrow the column in the template (`{{ i.title | truncate(60) }}`) if you want it short.
 - **Saved response examples** and data-driven iteration.
 
+### Checking and formatting
+
+`rq check` reads every file the way a run would and reports what a run would trip over:
+
+| finding | level |
+|---|---|
+| a file that does not parse, or has frontmatter and no `url:` | error |
+| `parents:` naming something that does not resolve, or a loop | error |
+| `capture:` starting anywhere but `response`, `status`, `status_text`, `headers`, `body`, `time_ms`, `bytes`, `vars`, `request` | error |
+| `-- view --` that does not parse as a template | error |
+| `file:` pointing at something that is not there | error |
+| `-- form --` that is not valid YAML | error |
+| `{{name}}` nothing provides | warning |
+| two requests sharing a short name | warning |
+| whatever the reader had to coerce | warning |
+
+Warnings do not fail the command unless `--strict`; errors exit 1 either way. A name is
+"provided" if it is declared — by `vars:`, a `capture:`, a `-- form --` field, an ancestor
+collection, `.env`, or **any** environment. `-e <name>` narrows that last one to a single
+environment, which is the stricter question.
+
+`rq fmt` rewrites documents canonically (`--check` reports and exits 1 without writing).
+Formatting is parse-then-write, so it is defined by the same reader a run uses; anything this
+build does not know — an unrecognised key, an unrecognised section — is preserved verbatim.
+
 ### Not planned: editing
 
 **`rq` does not edit requests, and no editor is planned.** A request is a Markdown file, so

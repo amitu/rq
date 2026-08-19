@@ -140,6 +140,15 @@ pub fn warn_sign() -> &'static str {
     "!"
 }
 
+/// The mark for something that cannot work, next to `tick`'s for something that does.
+pub fn cross() -> &'static str {
+    if unicode() {
+        "✗"
+    } else {
+        "x"
+    }
+}
+
 /// `https://api.github.com/repos/x/y/issues` → `.../repos/x/y/issues`, the way a network
 /// panel abbreviates it.
 pub fn short_url(url: &str) -> String {
