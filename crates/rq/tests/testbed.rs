@@ -596,3 +596,137 @@ fn a_form_default_that_is_a_template_resolves() {
     assert!(text.contains("Posted as @amitu"), "{text}");
     assert!(!text.contains("{{me}}"), "{text}");
 }
+
+// --- `--cookies`: a session that outlives the process ------------------------------------
+
+/// A two-request project with NO `parents:` between them.
+///
+/// The example project's `me` declares `parents: [login]`, so it authenticates itself inside
+/// one run — which is exactly the case that already worked. To see what `--cookies` adds, the
+/// two requests have to be unrelated, the way two things you type a minute apart are.
+fn unlinked_project(base: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    rq::project::init(dir.path()).unwrap();
+    std::fs::write(
+        dir.path().join("login.md"),
+        format!(
+            "---\nmethod: POST\nurl: {base}/auth/login\nheaders:\n  Content-Type: application/json\n---\n\n\
+             -- body --\n\n{{\"user\":\"amitu\",\"pass\":\"hunter2\"}}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("me.md"),
+        format!("---\nurl: {base}/me\n---\n"),
+    )
+    .unwrap();
+    dir
+}
+
+fn rq_in(dir: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(BIN)
+        .args(args)
+        .args(["--color=never", "--no-console"])
+        .current_dir(dir)
+        .env_remove("RQ_PROJECT")
+        .env("RQ_SCRIPT_ENGINE", "/nonexistent/cross-q-context")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("running rq")
+}
+
+/// Two separate `rq` invocations sharing a login.
+///
+/// This is the whole reason the flag exists: logging in now and using it later, which is how
+/// a person actually works at a terminal.
+#[test]
+fn cookies_kept_in_a_file_carry_a_session_between_runs() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+    let jar = p.join("session.json");
+
+    // Anonymous first.
+    let out = rq_in(p, &["r", "me"]);
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(
+        text.contains("401"),
+        "expected an unauthenticated 401:\n{text}"
+    );
+
+    // Log in, keeping the jar in a file we chose.
+    let out = rq_in(p, &["r", "login", "--cookies", jar.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(jar.is_file(), "the jar was not written");
+    assert!(
+        std::fs::read_to_string(&jar).unwrap().contains("session"),
+        "the session cookie should be in the file"
+    );
+
+    // A DIFFERENT process, and it is logged in.
+    let out = rq_in(p, &["r", "me", "--cookies", jar.to_str().unwrap()]);
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains("200 OK"),
+        "expected an authenticated 200:\n{text}"
+    );
+
+    // Deleting the file is how you log out — there is no command, and none is needed.
+    std::fs::remove_file(&jar).unwrap();
+    let out = rq_in(p, &["r", "me", "--cookies", jar.to_str().unwrap()]);
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(
+        text.contains("401"),
+        "removing the jar should log you out:\n{text}"
+    );
+}
+
+/// `--cookies` with no path writes `.rq/cookies.json` — the gitignored directory, so a kept
+/// session does not become a committed one.
+#[test]
+fn the_default_path_is_under_the_projects_own_state_dir() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+
+    let out = rq_in(p, &["r", "login", "--cookies"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let jar = p.join(".rq").join("cookies.json");
+    assert!(jar.is_file(), "expected {}", jar.display());
+    assert!(std::fs::read_to_string(&jar).unwrap().contains("session"));
+}
+
+/// Without the flag nothing is written anywhere — the default is still that session cookies
+/// do not touch the disk.
+#[test]
+fn without_the_flag_no_jar_is_written() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+
+    let out = rq_in(p, &["r", "login"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        !p.join(".rq").join("cookies.json").exists(),
+        "a jar appeared without being asked for"
+    );
+}
+
+/// A jar file that is not a jar is reported. Starting empty in silence would look exactly
+/// like the server logging you out, and you would go debugging the wrong end.
+#[test]
+fn an_unreadable_jar_is_reported_not_ignored() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+    let jar = p.join("broken.json");
+    std::fs::write(&jar, "this is not json").unwrap();
+
+    let out = rq_in(p, &["r", "login", "--cookies", jar.to_str().unwrap()]);
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(
+        text.contains("not a cookie jar rq can read"),
+        "expected the bad jar to be named:\n{text}"
+    );
+}

@@ -222,6 +222,23 @@ A page is a `-- view --`. A link is `[label](rq:name?var=value)`. A form is `-- 
 That is the whole vocabulary, and it is the same markdown you would have written to
 document the API.
 
+## Cookies
+
+A chain like `login → me` usually carries its session in a `Set-Cookie`, so `rq` keeps a jar
+for the length of a run. It is **not** written to disk unless you ask, because session cookies
+are credentials and a client that quietly stored yours would be storing them without consent.
+
+```bash
+rq r login --cookies                    # keep them in .rq/cookies.json (gitignored)
+rq r me --cookies                       # a later run, still logged in
+rq r me --cookies ~/.rq/work.json       # or wherever you want them
+cat .rq/cookies.json                    # it is just a file
+rm .rq/cookies.json                     # and that is how you log out
+```
+
+There is no `rq cookies list` or `rq cookies clear`, because there is nothing worth wrapping:
+the path is explicit, so `cat` and `rm` already do it.
+
 ## Piping, scripts and CI
 
 One rule: **stdout is the result, stderr is the narration, and the result is the same

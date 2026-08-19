@@ -43,6 +43,13 @@ struct Cli {
     #[arg(long, global = true, value_name = "FORMAT")]
     from: Option<String>,
 
+    /// Keep cookies between runs in this file — `--cookies` alone uses `.rq/cookies.json`.
+    ///
+    /// Without it the jar dies with the process, because session cookies are credentials.
+    /// With it the file is the whole interface: read it with `cat`, clear it with `rm`.
+    #[arg(long, global = true, value_name = "FILE", num_args = 0..=1, default_missing_value = None)]
+    cookies: Option<Option<PathBuf>>,
+
     /// When to colour output.
     #[arg(long, global = true, value_enum, default_value = "auto")]
     color: Color,
@@ -300,7 +307,7 @@ fn dispatch(cli: &Cli) -> Result<i32> {
         }) => list_or_browse(cli, source.as_deref(), *console, *no_console, *json),
         Some(Command::R(args)) => {
             let project = open(cli, &cwd)?;
-            run_request(&project, args)
+            run_request(cli, &project, args)
         }
         Some(Command::E { name }) => {
             let project = open(cli, &cwd)?;
@@ -734,7 +741,29 @@ fn print_run(outcome: &run::Run, args: &RunArgs) {
     }
 }
 
-fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
+/// Where the jar lives for this invocation, if it is being kept at all.
+///
+/// `--cookies` with no path means `.rq/cookies.json` beside the project, which is gitignored.
+/// A collection read in place has no `.rq/` of its own — its "root" is the source file — so
+/// the default lands beside that file instead of inside it.
+fn cookie_path(cli: &Cli, project: &Project) -> Option<PathBuf> {
+    let chosen = cli.cookies.as_ref()?;
+    if let Some(explicit) = chosen {
+        return Some(explicit.clone());
+    }
+    let base = if project.is_converted() {
+        project
+            .root
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    } else {
+        project.root.clone()
+    };
+    Some(base.join(project::STATE_DIR).join("cookies.json"))
+}
+
+fn run_request(cli: &Cli, project: &Project, args: &RunArgs) -> Result<i32> {
     let target = project.resolve(&args.name)?;
     let mut cli_vars = Vec::new();
     for raw in &args.vars {
@@ -748,6 +777,7 @@ fn run_request(project: &Project, args: &RunArgs) -> Result<i32> {
         interactive: vars::stdin_is_interactive(),
         strict: args.strict,
         script_timeout_ms: args.script_timeout,
+        cookies: cookie_path(cli, project),
     };
 
     // A request that declares a `-- form --` is asking to be filled in. Show the form —
