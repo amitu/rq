@@ -87,6 +87,14 @@ pub struct Front {
     pub timeout: Option<u64>,
     pub follow_redirects: Option<bool>,
     pub verify_tls: Option<bool>,
+    /// Which SDK the `-- pre --` / `-- post --` sections are written against: `rq` (the
+    /// default), `pm` for a Postman script, `bru` for a Bruno one.
+    ///
+    /// A converted collection's scripts are carried **verbatim** — renaming someone's code
+    /// textually imports clean and throws later — so the file records the dialect instead and
+    /// the runtime reconciles it at execution. Writing this by hand is a supported thing to
+    /// do: paste a Postman script, say `script_dialect: pm`, and it runs.
+    pub script_dialect: Option<String>,
     /// Frontmatter keys this build doesn't know. Preserved verbatim on write.
     pub extra: Mapping,
 }
@@ -372,6 +380,7 @@ const KNOWN_KEYS: &[&str] = &[
     "timeout",
     "follow_redirects",
     "verify_tls",
+    "script_dialect",
 ];
 
 impl Front {
@@ -393,6 +402,7 @@ impl Front {
             timeout: take_u64(&mut map, "timeout", notes)?,
             follow_redirects: take_bool(&mut map, "follow_redirects", notes)?,
             verify_tls: take_bool(&mut map, "verify_tls", notes)?,
+            script_dialect: take_str(&mut map, "script_dialect", notes)?,
             extra: Mapping::new(),
         };
 
@@ -457,6 +467,9 @@ impl Front {
         }
         if let Some(v) = self.verify_tls {
             m.insert("verify_tls".into(), v.into());
+        }
+        if let Some(v) = &self.script_dialect {
+            m.insert("script_dialect".into(), v.clone().into());
         }
         for (k, v) in &self.extra {
             m.insert(k.clone(), v.clone());

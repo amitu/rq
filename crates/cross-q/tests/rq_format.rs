@@ -100,14 +100,11 @@ fn a_postman_collection_becomes_a_tree_and_keeps_its_scripts_verbatim() {
     assert!(doc.contains("-- post --"), "{doc}");
     // The pm.* source is carried as written — never string-replaced to rq.*.
     assert!(doc.contains("pm.environment.set"), "{doc}");
-    assert!(
-        report
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("dialect")),
-        "the dialect must be reported: {:?}",
-        report.diagnostics
-    );
+    // And the file says which dialect that is, which is what lets rq reconcile it at
+    // execution instead of the converter renaming it once and hoping. A diagnostic alone
+    // would not do: the document has to carry it, or the information dies with the report.
+    assert!(doc.contains("script_dialect: pm"), "{doc}");
+    let _ = &report;
 }
 
 #[test]

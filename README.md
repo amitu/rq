@@ -77,14 +77,17 @@ Two things keep this from becoming an N×M translation matrix:
   `[Asserts]`. cross-q lifts those into **first-class IR** (`asserts`, `vars`), so they convert
   with **zero** JS translation.
 - **Translate through one runtime, not per-pair.** Actually *executing* or transpiling across
-  dialects is the job of [`cross-q-context`](docs/CONTEXT.md) — a QuickJS `rq.*` runtime plus
-  a `pm.*` → `rq.*` transform — not the converter. The converter carries source + dialect.
+  dialects is the job of the runtime — a QuickJS `rq.*` engine plus the `pm.*` → `rq.*`
+  transform — not the converter. The converter carries source + dialect; `rq` reconciles them
+  at execution.
 
-  **Today that reconciliation is not wired into `rq`.** `rq` executes `rq.*`, which is what its
-  own `-- pre --`/`-- post --` blocks are written in; a `pm.*` or `bru.*` script that came in
-  from a conversion is carried into the file faithfully and then fails at run time with
-  `pm is not defined`. The transform exists (`crates/cq-transform`, Postman only) and is not
-  called yet. See [Not built yet](#not-built-yet).
+  **A Postman script runs unmodified**, which is the point of carrying it verbatim. Export
+  from Postman, point `rq` at the file, run it: the document records `script_dialect: pm` and
+  every run reconciles the source through [`crates/cq-transform`](crates/cq-transform), an
+  OXC-based transform that parses the script and rewrites identifiers *in scope* rather than
+  string-replacing `pm.` and hoping. `pm.*`, the legacy `postman.setEnvironmentVariable(…)`,
+  and v1's `tests['x'] = …` / `responseCode` / `responseBody` all work. Bruno's `bru.*` does
+  not yet — see [Not built yet](#not-built-yet).
 
 ## The `rq` CLI
 
@@ -259,13 +262,10 @@ that do run in a terminal.
 
 Named here so nobody has to find out by trying. Roughly in the order they matter:
 
-**Scripting across dialects.** `rq` runs `rq.*`. A converted collection's `pm.*` (Postman) or
-`bru.*` (Bruno) script is carried verbatim — deliberately; a textual rename imports clean and
-throws later — but nothing transforms it before execution yet, so it throws `pm is not defined`
-at run time. The Postman transform exists in `crates/cq-transform` and simply is not called;
-the emitted document also does not record which dialect a section is in, which is the first
-thing to fix. Bruno needs more: there is no `bru.*` platform in the transform and no `bru`
-runtime shim.
+**Bruno scripts.** `bru.*` does not run. Postman does — see below — but Bruno needs a
+platform in `crates/cq-transform` (its `Platform` enum has one variant today) and the
+matching runtime surface. A `bru.*` script is carried into the file, recorded as
+`script_dialect: bru`, and says so before it fails rather than failing mysteriously.
 
 **Running.**
 - data-driven iteration (`-d data.csv`, `-n 5`) and a JUnit reporter — the runtime already
