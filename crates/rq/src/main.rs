@@ -33,9 +33,14 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Use this project instead of searching upward for rq.toml.
-    #[arg(long, global = true, value_name = "DIR")]
+    /// Use this project instead of searching upward for rq.toml. A Postman export, a Bruno
+    /// collection or a curl file works here too — rq reads it in place, writing nothing.
+    #[arg(long, global = true, value_name = "DIR|FILE")]
     project: Option<PathBuf>,
+
+    /// Read the project as this format instead of detecting it: postman, bruno, curl, rq.
+    #[arg(long, global = true, value_name = "FORMAT")]
+    from: Option<String>,
 
     /// When to colour output.
     #[arg(long, global = true, value_enum, default_value = "auto")]
@@ -89,6 +94,11 @@ enum Command {
     /// List the requests in this project. This is what bare `rq` does.
     #[command(alias = "list", alias = "ls")]
     L {
+        /// A collection to read instead of this project: a Postman export, a Bruno tree, a
+        /// curl file. Read in place — nothing is written and nothing is converted on disk.
+        #[arg(value_name = "FILE")]
+        source: Option<PathBuf>,
+
         /// Browse them: arrow to one, enter to run it. On by default on a terminal.
         #[arg(long, short = 'c')]
         console: bool,
@@ -256,12 +266,13 @@ fn dispatch(cli: &Cli) -> Result<i32> {
     match &cli.command {
         // Bare `rq` *is* `rq l` — same output, same flags, no surprise depending on
         // whether something is watching. `-c` browses either way.
-        None => list_or_browse(cli, cli.console, cli.no_console, cli.json),
+        None => list_or_browse(cli, None, cli.console, cli.no_console, cli.json),
         Some(Command::L {
+            source,
             console,
             no_console,
             json,
-        }) => list_or_browse(cli, *console, *no_console, *json),
+        }) => list_or_browse(cli, source.as_deref(), *console, *no_console, *json),
         Some(Command::R(args)) => {
             let project = open(cli, &cwd)?;
             run_request(&project, args)
@@ -298,12 +309,56 @@ fn dispatch(cli: &Cli) -> Result<i32> {
 }
 
 fn open(cli: &Cli, cwd: &Path) -> Result<Project> {
-    Project::find(cli.project.as_deref(), cwd)
+    open_at(cli, cli.project.as_deref(), cwd)
+}
+
+/// `open`, with the project location supplied rather than taken from `--project`.
+fn open_at(cli: &Cli, explicit: Option<&Path>, cwd: &Path) -> Result<Project> {
+    let (project, report) = Project::locate(explicit, cwd, cli.from.as_deref())?;
+    // Reading a foreign collection is not a silent act: say what was read and as what, so a
+    // surprising result is traceable to the guess that produced it. Narration, so it lands on
+    // stderr and never in piped data.
+    if let Some((from, format)) = project.converted_from() {
+        let requests = project.requests().count();
+        eprintln!(
+            "{} {} {} as {} — {} request{}, nothing written",
+            ui::dim("reading"),
+            ui::bold(&from.file_name().unwrap_or_default().to_string_lossy()),
+            ui::dim("in place"),
+            ui::bold(format),
+            requests,
+            if requests == 1 { "" } else { "s" }
+        );
+        // Not every note, every time. A conversion of a large collection can have dozens,
+        // and a wall of them before each run buries whatever you were doing — the count is
+        // what tells you whether to go looking.
+        if let Some(report) = &report {
+            if let Some(summary) = conversion_summary(report) {
+                ui::note(&format!(
+                    "{summary} — `rq import {}` writes it out and lists them",
+                    from.display()
+                ));
+            }
+        }
+    }
+    Ok(project)
 }
 
 /// The project's requests: printed, or browsed when asked for and possible.
-fn list_or_browse(cli: &Cli, console: bool, no_console: bool, json: bool) -> Result<i32> {
-    let project = open(cli, &std::env::current_dir()?)?;
+fn list_or_browse(
+    cli: &Cli,
+    source: Option<&Path>,
+    console: bool,
+    no_console: bool,
+    json: bool,
+) -> Result<i32> {
+    // `rq l ./api.postman_collection.json` is the same thing as `--project` pointing at it;
+    // the positional exists because pointing rq at a file is the obvious way to ask.
+    let cwd = std::env::current_dir()?;
+    let project = match source {
+        Some(path) => open_at(cli, Some(path), &cwd)?,
+        None => open(cli, &cwd)?,
+    };
     if json {
         println!("{:#}", project_json(&project));
         return Ok(0);
@@ -870,7 +925,19 @@ fn plural(n: usize) -> &'static str {
 
 fn edit(project: &Project, name: &str) -> Result<()> {
     let idx = project.resolve(name)?;
-    let path = project.entries[idx].file();
+    // A converted request has no file — it was made out of the source collection a moment
+    // ago. Opening the source is what someone asking to edit it actually wants; opening a
+    // path that does not exist is not.
+    let path = match project.converted_from() {
+        Some((from, format)) => {
+            ui::note(&format!(
+                "{} is a {format} collection — opening it, not the request",
+                from.display()
+            ));
+            from.to_path_buf()
+        }
+        None => project.entries[idx].file(),
+    };
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| {
@@ -1015,6 +1082,35 @@ fn import(cli: &Cli, cwd: &Path, args: &ImportArgs) -> Result<i32> {
 
 /// Print what the conversion couldn't carry cleanly. A conversion that claims success
 /// while dropping data is the one unforgivable bug.
+/// What the conversion had to change, in one line — or nothing at all when it was clean.
+fn conversion_summary(report: &cq_report::Report) -> Option<String> {
+    let mut dropped = 0usize;
+    let mut coerced = 0usize;
+    let mut errors = 0usize;
+    for d in &report.diagnostics {
+        match d.severity {
+            cq_report::Severity::Dropped => dropped += 1,
+            cq_report::Severity::Coerced => coerced += 1,
+            cq_report::Severity::Error => errors += 1,
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    if errors > 0 {
+        parts.push(format!(
+            "{errors} error{}",
+            if errors == 1 { "" } else { "s" }
+        ));
+    }
+    if dropped > 0 {
+        parts.push(format!("{dropped} dropped"));
+    }
+    if coerced > 0 {
+        parts.push(format!("{coerced} coerced"));
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 fn report_notes(report: &cq_report::Report) {
     let mut shown = 0usize;
     for d in &report.diagnostics {
@@ -1038,7 +1134,8 @@ fn report_notes(report: &cq_report::Report) {
 }
 
 fn open_or_init(cli: &Cli, cwd: &Path) -> Result<(Project, bool)> {
-    match Project::find(cli.project.as_deref(), cwd) {
+    // Disk only: this is the path that is about to write a file.
+    match Project::find_on_disk(cli.project.as_deref(), cwd) {
         Ok(p) => Ok((p, false)),
         Err(_) => {
             let root = cli.project.clone().unwrap_or_else(|| cwd.to_path_buf());

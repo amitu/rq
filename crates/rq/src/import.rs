@@ -101,6 +101,67 @@ pub fn read_dir_map(dir: &Path) -> Result<BTreeMap<String, String>> {
     Ok(out)
 }
 
+/// What a directory is, judged by what is in it. Directories are trees, so they are read
+/// into the virtual-FS map first and identified from the names inside.
+pub fn detect_dir(map: &BTreeMap<String, String>) -> Option<&'static str> {
+    // Order matters, and "any .md file" is the weakest signal of the three: a Bruno
+    // collection with a `readme.md` in it — usebruno's own test collection has one — was
+    // being read as an rq project, which finds no requests at all and says so in a way that
+    // sounds like the collection is empty. A marker or a `.bru` is a statement about what
+    // the directory IS; loose markdown is just a file that happens to be there.
+    if map.contains_key(layout::MARKER) {
+        Some("rq")
+    } else if map.keys().any(|k| k.ends_with(".bru") || k == "bruno.json") {
+        Some("bruno")
+    } else if map.keys().any(|k| k.ends_with(".md")) {
+        Some("rq")
+    } else {
+        None
+    }
+}
+
+/// Everything cross-q needs to read `path`: the content in the shape the importer takes, and
+/// the format it appears to be.
+pub fn source_at(path: &Path) -> Result<(String, Option<&'static str>)> {
+    if path.is_dir() {
+        let map = read_dir_map(path)?;
+        let detected = detect_dir(&map);
+        Ok((serde_json::to_string(&map)?, detected))
+    } else {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let detected = detect_format(path, &text);
+        Ok((text, detected))
+    }
+}
+
+/// Read anything cross-q understands and produce **the rq project it describes** — the same
+/// map `rq import` writes to disk, without writing it.
+///
+/// This is what lets `rq` open a Postman file directly. The conversion is not a lesser
+/// version of importing: it is the identical call, so a collection read in place behaves
+/// exactly like the same collection imported, and there is still one converter.
+pub fn to_project_map(
+    path: &Path,
+    forced: Option<&str>,
+    report: &mut cq_report::Report,
+) -> Result<(BTreeMap<String, String>, String)> {
+    let (content, detected) = source_at(path)?;
+    let format = match forced {
+        Some(f) => f.to_string(),
+        None => detected
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "could not tell what {} is — pass --from postman|bruno|curl|rq",
+                    path.display()
+                )
+            })?
+            .to_string(),
+    };
+    let ws = cross_q::build_workspace(&format, &content, report)?;
+    Ok((cross_q::emit_rq_md::to_rq_md(&ws, report), format))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +187,28 @@ mod tests {
         let (doc, _) = project.load(idx).unwrap();
         assert_eq!(doc.front.method.as_deref(), Some("POST"));
         assert_eq!(doc.section("body"), Some("{\"user\":\"amitu\"}"));
+    }
+
+    #[test]
+    fn a_bruno_tree_with_a_readme_is_still_bruno() {
+        let bruno = BTreeMap::from([
+            ("bruno.json".to_string(), "{}".to_string()),
+            ("readme.md".to_string(), "# notes".to_string()),
+            ("get.bru".to_string(), "meta { name: get }".to_string()),
+        ]);
+        assert_eq!(detect_dir(&bruno), Some("bruno"));
+
+        // A real rq project still wins on its marker, README or not.
+        let project = BTreeMap::from([
+            (layout::MARKER.to_string(), String::new()),
+            ("readme.md".to_string(), "# notes".to_string()),
+        ]);
+        assert_eq!(detect_dir(&project), Some("rq"));
+
+        // Markdown alone is still an rq tree — that is how a project without its marker
+        // (a subdirectory, say) is read.
+        let loose = BTreeMap::from([("issues.md".to_string(), "---\nurl: x\n---\n".to_string())]);
+        assert_eq!(detect_dir(&loose), Some("rq"));
     }
 
     #[test]
