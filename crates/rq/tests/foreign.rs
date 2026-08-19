@@ -349,7 +349,14 @@ fn a_foreign_dialect_script_runs() {
 
     // The compiled-in engine, not the pinned-off one the other cases use.
     let out = Command::new(BIN)
-        .args(["--project", "./collection", "r", "get", "--color=never", "--no-console"])
+        .args([
+            "--project",
+            "./collection",
+            "r",
+            "get",
+            "--color=never",
+            "--no-console",
+        ])
         .current_dir(dir.path())
         .env_remove("RQ_PROJECT")
         .env_remove("RQ_SCRIPT_ENGINE")
