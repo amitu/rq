@@ -822,9 +822,20 @@ pub fn init(root: &Path) -> Result<bool> {
 
     let gitignore = root.join(".gitignore");
     if !gitignore.exists() {
+        // Written as one concatenated literal, NOT a `\`-continued one: a continuation
+        // carries the source indentation into the string, which put 13 spaces in front of
+        // every pattern. git does not strip leading whitespace, so the file ignored nothing
+        // and `.env` — the file this project tells people to put secrets in — was staged by
+        // the next `git add .`.
         std::fs::write(
             &gitignore,
-            "# rq keeps the active environment and other machine-local state here.\n             .rq/\n\n             # Secrets belong to your machine, not to the collection.\n             .env\n",
+            concat!(
+                "# rq keeps the active environment and other machine-local state here.\n",
+                ".rq/\n",
+                "\n",
+                "# Secrets belong to your machine, not to the collection.\n",
+                ".env\n",
+            ),
         )?;
     }
     Ok(true)
@@ -844,6 +855,34 @@ fn common_prefix(a: &str, b: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    /// `rq init` writes a `.gitignore` whose patterns actually match.
+    ///
+    /// They did not: the literal was `\`-continued, so every pattern carried the source's
+    /// indentation — `             .env` — and git does not strip leading whitespace from a
+    /// pattern. The file this project tells people to keep secrets in was left tracked, and
+    /// the .gitignore sitting next to it said otherwise. A test on the exact bytes, because
+    /// "it looks right" is what shipped it.
+    #[test]
+    fn a_new_project_ignores_its_secrets_and_its_state() {
+        let dir = tempfile::tempdir().unwrap();
+        init(dir.path()).unwrap();
+        let ignore = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+
+        let patterns: Vec<&str> = ignore
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            .collect();
+        assert_eq!(patterns, vec![".rq/", ".env"], "{ignore:?}");
+        for p in &patterns {
+            assert_eq!(
+                *p,
+                p.trim_start(),
+                "a leading space makes the pattern match nothing: {p:?}"
+            );
+        }
+    }
+
     use super::*;
 
     fn fixture() -> (tempfile::TempDir, Project) {
