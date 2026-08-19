@@ -450,6 +450,19 @@ including `headerList`, `getBody`, `getStatus`. A `tests {}` block's bare `test`
 Anything outside that surface **throws by name** (`bru.interpolate() is a Bruno API rq does not
 implement yet`) instead of returning `undefined` and making the following line quietly wrong.
 
+### Cookies between runs
+
+The jar lives for one run and is not persisted, because session cookies are credentials.
+`--cookies` opts in and names the file:
+
+| | |
+|---|---|
+| `--cookies` | `.rq/cookies.json` under the project (gitignored) |
+| `--cookies <file>` | exactly that file |
+
+The file is the entire interface — read it, delete it, point two projects at the same one,
+keep one per environment. rq adds no commands around it because a path needs none.
+
 ### Checking and formatting
 
 `rq check` reads every file the way a run would and reports what a run would trip over:

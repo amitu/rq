@@ -1,10 +1,15 @@
-//! A cookie jar for the length of a run.
+//! The cookie jar.
 //!
 //! A chain like `login → me` usually carries its session in a `Set-Cookie`, not a token in
-//! a JSON body, so without a jar half of the real chains in the world don't work. The jar
-//! lives for one `rq r` invocation and is never written to disk: a terminal client that
-//! quietly persisted your session cookies would be storing credentials you didn't ask it to
-//! store.
+//! a JSON body, so without a jar half of the real chains in the world don't work.
+//!
+//! By default the jar lives for one `rq r` invocation and never touches the disk: a terminal
+//! client that quietly persisted your session cookies would be storing credentials you did
+//! not ask it to store. `--cookies` asks it to — and then the file is the whole interface.
+//! There is no `rq cookies list` or `rq cookies clear` because there is nothing to wrap: the
+//! path is yours, `cat` reads it and `rm` clears it. Session cookies ARE credentials, so a
+//! jar you keep is a secret you keep; `--cookies` with no path puts it under `.rq/`, which is
+//! gitignored.
 //!
 //! Scope, stated plainly: host and path matching, `Secure`, and `Max-Age=0` deletion.
 //! `Expires` is not evaluated — a run is seconds long, and a wrong date parser that silently
@@ -12,7 +17,7 @@
 
 use std::fmt::Write as _;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Cookie {
     pub name: String,
     pub value: String,
@@ -25,7 +30,7 @@ pub struct Cookie {
     pub http_only: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Jar {
     cookies: Vec<Cookie>,
 }
@@ -33,6 +38,51 @@ pub struct Jar {
 impl Jar {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Read a jar from `path`. A file that is not there is simply an empty jar — the first
+    /// run with `--cookies` has nothing to load, and that is not a problem to report.
+    /// A file that is there and unreadable IS reported: silently starting empty would log you
+    /// out and look like the server's fault.
+    pub fn load(path: &std::path::Path) -> (Jar, Option<String>) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Jar::new(), None),
+            Err(e) => {
+                return (
+                    Jar::new(),
+                    Some(format!(
+                        "{}: {e}; starting with an empty jar",
+                        path.display()
+                    )),
+                )
+            }
+        };
+        match serde_json::from_str::<Jar>(&text) {
+            Ok(jar) => (jar, None),
+            Err(e) => (
+                Jar::new(),
+                Some(format!(
+                    "{}: not a cookie jar rq can read ({e}); starting with an empty one",
+                    path.display()
+                )),
+            ),
+        }
+    }
+
+    /// Write the jar to `path`, creating its directory. Pretty-printed on purpose: the file
+    /// is the interface, so it has to be readable by the person who owns it.
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into());
+        std::fs::write(path, format!("{json}\n"))
+    }
+
+    /// How many cookies are held, for the line a run prints when it keeps them.
+    pub fn len(&self) -> usize {
+        self.cookies.len()
     }
 
     pub fn is_empty(&self) -> bool {

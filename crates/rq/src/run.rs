@@ -28,6 +28,9 @@ pub struct RunOptions {
     pub strict: bool,
     /// Per-script wall clock handed to the engine. `None` = the engine's own default.
     pub script_timeout_ms: Option<u64>,
+    /// `--cookies [FILE]`: keep the jar here between runs. `None` = the jar dies with the
+    /// process, which is the default because session cookies are credentials.
+    pub cookies: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -152,8 +155,19 @@ pub fn run(
     let mut runtime: Vec<(String, String)> = Vec::new();
     let mut steps: Vec<Step> = Vec::new();
     let mut secrets: Vec<String> = Vec::new();
-    // One jar for the whole run, never written to disk (see `cookies`).
-    let mut jar = Jar::new();
+    // One jar for the whole run. With `--cookies` it is loaded from that file first and
+    // written back at the end, which is what makes `rq r login` and a later `rq r me` share
+    // a session instead of each starting anonymous.
+    let mut jar = match &opts.cookies {
+        Some(path) => {
+            let (jar, problem) = Jar::load(path);
+            if let Some(problem) = problem {
+                notes.push(problem);
+            }
+            jar
+        }
+        None => Jar::new(),
+    };
     let total_entries = order.len() as u32;
 
     for idx in order {
@@ -398,6 +412,18 @@ pub fn run(
             };
             run.secrets.sort();
             run.secrets.dedup();
+            if let Some(path) = &opts.cookies {
+                match jar.save(path) {
+                    Ok(()) => run.notes.push(format!(
+                        "kept {} cookie(s) in {}",
+                        jar.len(),
+                        path.display()
+                    )),
+                    Err(e) => run
+                        .notes
+                        .push(format!("could not write {}: {e}", path.display())),
+                }
+            }
             if opts.strict {
                 enforce_strict(&run)?;
             }
