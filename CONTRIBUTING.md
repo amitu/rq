@@ -6,6 +6,15 @@ and compiled to each ecosystem (a native crate, a WebAssembly build for npm, a w
 PyPI). If you're a JavaScript or Python dev, this page is your on-ramp: a weekend of Rust is
 plenty to be useful.
 
+## One thing we are not building
+
+**An editor.** `rq` reads and runs; it does not edit. A request is a Markdown file, and
+`rq e <name>` hands it to `$EDITOR` — the one you already know, which is better at this than
+anything we would write. Proposals to add an editing surface (a form that rewrites a request,
+an in-console buffer, a text editor in the TUI) are declined on scope, not on merit: it is a
+large, open-ended undertaking, and every hour in it is an hour not spent on what rq is for.
+Full note in [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md#not-planned-editing).
+
 ## You can contribute with zero Rust
 
 - File issues, improve docs, add conversion **fixtures** (input → expected output JSON).

@@ -416,12 +416,21 @@ and read back whole — it is reported, never stripped.
 
 Named so you don't have to discover it:
 
-- **Editing from the browser** — bare `rq` lists the project and runs what you pick, but
-  `e` to open the selected request in `$EDITOR` isn't wired yet.
 - **Terminal-width-aware tables** — columns are aligned to their content, so a table with
   very long cells is wider than an 80-column window and wraps. Nothing is truncated;
   narrow the column in the template (`{{ i.title | truncate(60) }}`) if you want it short.
 - **Saved response examples** and data-driven iteration.
+
+### Not planned: editing
+
+**`rq` does not edit requests, and no editor is planned.** A request is a Markdown file, so
+the editor you already have is better at this than anything we would build — `rq e <name>`
+hands the file to `$EDITOR` and gets out of the way, and that is the whole feature.
+
+This is a decision, not a gap: building an editing surface (a form to change a request, an
+in-console buffer, a TUI text field beyond what a `-- form --` needs at request time) is a
+large, open-ended undertaking that would compete with everything that makes rq worth using.
+It is listed here so it stops being proposed.
 - Protocols other than HTTP. GraphQL imports as a JSON POST body.
 
 **Timing, precisely.** `--show timing` and the console's timing pane break a request into
