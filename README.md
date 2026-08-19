@@ -11,10 +11,11 @@ Everything here is Rust, MIT-licensed, plain files, no telemetry, no account.
 
 | Crate | Binary / package | What it is | Status |
 |---|---|---|---|
-| [`crates/cross-q`](crates) | `cq` | Convert API-client collections between formats (Postman ↔ Requestly ↔ Insomnia ↔ Bruno ↔ HAR ↔ OpenAPI ↔ cURL) through one idealised model, and report everything it couldn't carry cleanly. | 🏗️ building |
+| [`crates/cross-q`](crates) | `cq` | Convert API-client collections between formats (today: Postman ↔ Bruno ↔ Requestly ↔ rq ↔ cURL; more below) through one idealised model, and report everything it couldn't carry cleanly. | 🏗️ building |
 | `crates/cq-model` | — | The **Idealised Model** — the canonical intermediate representation every importer and exporter maps through. | ✅ v0.1 |
 | `crates/cq-transform` + [`packages/cross-q-context`](packages/cross-q-context) | `@requestly/cross-q-context` (npm) | The scripting core: rewrite every dialect (`pm.*`, `postman.*`, `bru.*`) to the `rq.*` API (Rust/OXC → WASM), and execute it on a QuickJS runtime. | 🏗️ building |
 | [`crates/rq`](crates/rq) | `rq` | The CLI: named requests, declared chaining, responses rendered as legible markdown. | 🏗️ building |
+| [`crates/rq-testbed`](crates/rq-testbed) | `rq-testbed` | The demo API the examples talk to — a dependency-free server (`std::net` and JSON) with a small stateful app behind it. | ✅ v0.1 |
 | [`crates/rq-doc`](crates/rq-doc) | — | The `rq` request document — one Markdown file per request — and the project layout around it. Read by the CLI, written by the converter. | ✅ v0.1 |
 
 ## Supported formats
@@ -27,7 +28,7 @@ holistic (all of a version's features in one go), not feature-by-feature.
 
 | App | Version | Import | Export | Notes |
 |---|---|:--:|:--:|---|
-| **Postman** | Collection v2.1.0 | ✅ | 🏗️ | 47/47 of Postman's own corpus parse; export is the round-trip emitter, not yet a CLI target |
+| **Postman** | Collection v2.1.0 | ✅ | ✅ | 47/47 of Postman's own corpus parse; `--to postman` |
 | **Postman** | Collection v2.0.0 | ✅ | 🔜 | object-shaped auth |
 | **Postman** | Collection v1.0.0 | ✅ | 🔜 | legacy flat `requests[]`/`folders[]` |
 | **cURL** | command line | ✅ | 🔜 | single command ↔ request |
@@ -109,7 +110,7 @@ your terminal — every step of the run, its
 request, its response, its headers, and where the milliseconds actually went — over the run
 you already did. Nothing is re-sent, and there is no second `--verbose` pass.
 
-Each request is **one Markdown file** — `github/login.md`, no wrapper directory — — frontmatter plus `-- description --`,
+Each request is **one Markdown file** — `github/login.md`, no wrapper directory — frontmatter plus `-- description --`,
 `-- view --`, `-- body --`, `-- pre --`, `-- post --` sections. The `-- view --` template
 renders the response as markdown in your terminal, which is the thing no other client in
 this category does. Dependencies are declared per request (`parents: [login]`) and the
@@ -233,6 +234,15 @@ timings, each test's status — which is what makes it the shape for CI:
 rq r checks --json | jq -e '.tests.failed == 0'
 ```
 
+`rq check` is the other half of that, and it sends no requests at all — a gate that runs on a
+pull request touching the collection, before anything is spent:
+
+```bash
+rq check --strict            # exit 1 on anything, including warnings
+rq check --json | jq '.findings[] | select(.level == "error")'
+rq fmt --check               # exit 1 if any file is not in canonical form
+```
+
 Exit codes: **0** normally, **1** when a `rq.test(...)` failed (no flag needed — an
 assertion that fails quietly is how people stop trusting a runner) or when `--fail` is set
 and the response wasn't 2xx, **2** for anything rq itself couldn't do.
@@ -312,6 +322,13 @@ Reliability is the product, so the tests are the spec. Three layers:
 
 The engine also ships as WASM (`@requestly/cross-q`); `packages/cross-q` has a Node smoke
 test that runs every importer through the compiled boundary.
+
+Every pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): rustfmt and
+`clippy -D warnings`; the workspace suite on **Linux and macOS** after fetching all three
+corpora; a `cargo check` on the MSRV we advertise; and the TypeScript runtime — its own
+suites, a check that the committed `dist/` and the guest bundle rq compiles in are both in
+sync with `src/`, and rq's engine integration tests with `RQ_REQUIRE_ENGINE=1`, which is the
+one place the "no engine installed" skip can never fire.
 
 ## Why
 
