@@ -33,8 +33,11 @@ fn postman(base: &str) -> String {
 }
 
 fn run(dir: &Path, args: &[&str]) -> (String, String, i32) {
-    // `--no-console` only exists where a console does; `rq env` would reject it.
-    let extra: &[&str] = if args.first() == Some(&"env") {
+    // `--no-console` only exists where a console does; `rq env`, `rq check` and `rq fmt`
+    // would reject it.
+    let extra: &[&str] = if matches!(args.first(), Some(&"env") | Some(&"check") | Some(&"fmt"))
+        || args.get(2) == Some(&"check")
+    {
         &["--color=never"]
     } else {
         &["--color=never", "--no-console"]
@@ -235,4 +238,84 @@ fn a_collection_read_in_place_has_nowhere_to_save_an_active_environment() {
         "the refusal should point somewhere useful:\n{err}"
     );
     assert_eq!(tree(dir.path()), before, "an `.rq/` was left behind");
+}
+
+// --- what `rq check` does with somebody else's collection --------------------------------
+
+/// A Bruno collection: one good request, one file that does not parse.
+fn bruno_tree(dir: &Path, base: &str) {
+    let c = dir.join("collection");
+    std::fs::create_dir_all(&c).unwrap();
+    std::fs::write(
+        c.join("bruno.json"),
+        r#"{ "version": "1", "name": "demo", "type": "collection" }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        c.join("ok.bru"),
+        format!("meta {{\n  name: ok\n  type: http\n}}\nget {{\n  url: {base}/ok\n}}\n"),
+    )
+    .unwrap();
+    // Someone hand-edited this one and lost a brace — the everyday `.bru` failure.
+    std::fs::write(
+        c.join("broken.bru"),
+        "meta {\n  name: broken\n  type: http\n\nget {\n  url: https://x.test/broken\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn check_names_the_source_file_that_would_not_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(0, |_| (200, "OK", String::new()));
+    bruno_tree(dir.path(), &stub.base);
+
+    // rq does not validate `.bru` syntax itself — cross-q does, while reading. What matters
+    // is that rq says so instead of loading one request, reporting "1 dropped", and calling
+    // the project healthy.
+    let (out, err, code) = run(dir.path(), &["--project", "./collection", "check"]);
+    let text = format!("{out}{err}");
+    assert_eq!(code, 1, "{text}");
+    assert!(
+        text.contains("broken.bru"),
+        "the file should be named:\n{text}"
+    );
+    assert!(!text.contains("nothing to report"), "{text}");
+}
+
+#[test]
+fn check_does_not_cry_wolf_over_a_collection_that_merely_lost_detail() {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = Stub::start(0, |_| (200, "OK", String::new()));
+    std::fs::write(
+        dir.path().join("acme.postman_collection.json"),
+        postman(&stub.base),
+    )
+    .unwrap();
+
+    // Everything the converter mentions is worth knowing, but a request that came through
+    // with less than it had is a warning, not an error — otherwise every real collection
+    // fails `check` and nobody runs it twice.
+    let (out, err, code) = run(dir.path(), &["check"]);
+    let text = format!("{out}{err}");
+    assert_eq!(code, 0, "{text}");
+    assert!(!text.contains("✗"), "{text}");
+}
+
+#[test]
+fn a_corrupt_collection_says_which_file_and_why() {
+    let dir = tempfile::tempdir().unwrap();
+    // Truncated mid-array: the export was interrupted, or an editor mangled it.
+    std::fs::write(
+        dir.path().join("acme.postman_collection.json"),
+        r#"{"info":{"name":"x","schema":"https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},"item":["#,
+    )
+    .unwrap();
+
+    let (out, err, code) = run(dir.path(), &["check"]);
+    let text = format!("{out}{err}");
+    assert_ne!(code, 0);
+    // "no rq project found" would be true and useless with the file sitting right there.
+    assert!(text.contains("acme.postman_collection.json"), "{text}");
+    assert!(text.contains("JSON"), "{text}");
 }

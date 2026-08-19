@@ -686,7 +686,12 @@ fn build_tree(files: &BTreeMap<String, String>, dir: &str, report: &mut Report) 
                         let seq = req.meta.rank.as_deref().and_then(|s| s.parse::<i64>().ok());
                         items.push((seq, rel.to_string(), Item::Request(Box::new(req))));
                     }
-                    Err(e) => report.dropped(Phase::Parse, prov(path.clone()), e),
+                    // `Error`, not `Dropped`: the request is not in the workspace at all,
+                    // which is what `Severity::Error` means ("could not complete this item")
+                    // and what rq_md.rs already reports for an unreadable document. As a
+                    // Dropped it was indistinguishable from "this request came through
+                    // without its file body" — same severity, very different consequence.
+                    Err(e) => report.error(Phase::Parse, prov(path.clone()), e),
                 }
             }
         }
