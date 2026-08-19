@@ -48,6 +48,7 @@ import { createTimerBridges } from './isolated/bridges/timer-bridge.js';
 import { CORE_GLOBALS_SHIM } from './isolated/core-globals.js';
 import { dlog } from './isolated/debug-log.js';
 import { RQ_COLLECT_EXPR, RQ_ISOLATE_SHIM, RQ_ITERATION_RESET_EXPR } from './isolated/isolated-rq.js';
+import { AXIOS_ISOLATE_SHIM } from './isolated/shims/axios.shim.js';
 import { BRU_ISOLATE_SHIM } from './isolated/shims/bru.shim.js';
 import { marshalToHandle } from './isolated/marshal.js';
 import { pendingAsyncCalls } from './isolated/safe-bridge-factory.js';
@@ -558,6 +559,7 @@ export class QuickJsEngine {
             this.evalOrThrow(ctx, RQ_ISOLATE_SHIM, 'rq-namespace');
             // See execute.ts — Bruno's globals, mapped onto the rq namespace.
             this.evalOrThrow(ctx, BRU_ISOLATE_SHIM, 'bru-compat');
+            this.evalOrThrow(ctx, AXIOS_ISOLATE_SHIM, 'axios-facade');
             // 6. Legacy Postman deprecation identifiers (ADR-156 parity). MUST run AFTER
             //    step 5 — the `globals`/`environment`/`responseBody`/`responseCode` shims
             //    delegate to `globalThis.rq`. Installed unconditionally, matching

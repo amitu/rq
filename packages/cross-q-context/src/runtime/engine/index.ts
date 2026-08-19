@@ -70,6 +70,7 @@ export { RQ_ISOLATE_SHIM, RQ_ITERATION_RESET_EXPR, RQ_COLLECT_EXPR } from './iso
 // Bruno's `bru`/`req`/`res` mapped onto the rq namespace — a shim, not a transform, because
 // Bruno has no syntax-level forms to rewrite. See the file for the full argument.
 export { BRU_ISOLATE_SHIM } from './isolated/shims/bru.shim.js';
+export { AXIOS_ISOLATE_SHIM } from './isolated/shims/axios.shim.js';
 export type { InIsolateCollected } from './isolated/isolated-rq.js';
 
 // The require chain — REQUIRE_ISOLATE_SHIM (guest require) over resolveRequire (the built-in /

@@ -29,6 +29,7 @@ import { AsyncRegistry } from './async-registry.js';
 import { pendingAsyncCalls } from './isolated/safe-bridge-factory.js';
 import { LogLevel } from '../contract.js';
 import { RQ_ISOLATE_SHIM, RQ_COLLECT_EXPR } from './isolated/isolated-rq.js';
+import { AXIOS_ISOLATE_SHIM } from './isolated/shims/axios.shim.js';
 import { BRU_ISOLATE_SHIM } from './isolated/shims/bru.shim.js';
 import { REQUIRE_ISOLATE_SHIM } from './isolated/shims/require.shim.js';
 import { VENDOR_IIFES } from './vendor-codegen/vendor-iifes.js';
@@ -260,6 +261,7 @@ export async function executeScript(input: ExecuteScriptInput): Promise<ScriptEx
     // Bruno's globals over the rq namespace, so a `.bru` script runs unmodified. Last,
     // because it maps onto `globalThis.rq`.
     evalOrThrow(ctx, BRU_ISOLATE_SHIM, 'bru-compat');
+    evalOrThrow(ctx, AXIOS_ISOLATE_SHIM, 'axios-facade');
 
     // Eval the user script wrapped in an async IIFE with a top-level catch that records the error.
     const wrapped = `(async () => { try {\n${input.script}\n} catch (e) { globalThis.__rq_error = (e && e.message) ? String(e.message) : String(e); globalThis.__rq_stack = (e && e.stack) ? String(e.stack) : ''; } })()`;
