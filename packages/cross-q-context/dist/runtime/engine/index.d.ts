@@ -24,6 +24,7 @@ export { UTIL_ISOLATE_SHIM } from './isolated/shims/util.shim.js';
 export { ZLIB_ISOLATE_SHIM } from './isolated/shims/zlib.shim.js';
 export { RQ_ISOLATE_SHIM, RQ_ITERATION_RESET_EXPR, RQ_COLLECT_EXPR } from './isolated/isolated-rq.js';
 export { BRU_ISOLATE_SHIM } from './isolated/shims/bru.shim.js';
+export { AXIOS_ISOLATE_SHIM } from './isolated/shims/axios.shim.js';
 export type { InIsolateCollected } from './isolated/isolated-rq.js';
 export { REQUIRE_ISOLATE_SHIM, resolveRequire, extractRequireIds } from './isolated/isolated-require.js';
 export type { BundleRequireDeps, PrebundledRequires } from './isolated/isolated-require.js';

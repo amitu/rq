@@ -19,6 +19,7 @@ const { REQUIRE_ISOLATE_SHIM } = await import(dist('isolated/shims/require.shim.
 const { RQ_ISOLATE_SHIM, RQ_COLLECT_EXPR, RQ_ITERATION_RESET_EXPR } = await import(dist('isolated/isolated-rq.js'));
 const { DEPRECATION_ISOLATE_SHIM } = await import(dist('isolated/bridges/deprecation-bridge.js'));
 const { BRU_ISOLATE_SHIM } = await import(dist('isolated/shims/bru.shim.js'));
+const { AXIOS_ISOLATE_SHIM } = await import(dist('isolated/shims/axios.shim.js'));
 const { RUN_REQUEST_ISOLATE_SHIM } = await import(dist('isolated/bridges/run-request-bridge.js'));
 const { VENDOR_IIFES } = await import(dist('vendor-codegen/vendor-iifes.js'));
 const { NEEDS_BRIDGE_MODULE_GLOBALS } = await import(dist('isolated/needs-bridge-globals.js'));
@@ -73,6 +74,7 @@ const bundle = {
     { name: 'rq-namespace', source: RQ_ISOLATE_SHIM },
     // Last: it maps Bruno's globals onto the rq namespace, so that has to exist first.
     { name: 'bru-compat', source: BRU_ISOLATE_SHIM },
+    { name: 'axios-facade', source: AXIOS_ISOLATE_SHIM },
   ],
   // Drained after the script settles: one JSON string out of the isolate.
   collectExpr: RQ_COLLECT_EXPR,

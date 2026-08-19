@@ -12,6 +12,15 @@
 import * as vm from 'node:vm';
 
 import { ARRAY_METHODS_SHIM, CONVENIENCE_GLOBALS_SHIM } from '../../index.js';
+// Bruno's `bru`/`req`/`res` + bare `test`/`expect` shim. Realm-agnostic (it only reads
+// `globalThis.rq` and installs globals on it), so the Developer engine evaluates the SAME source
+// the Safe engine does — the two cannot drift. Imported straight from the shim module (not the
+// engine barrel) to avoid an import cycle back through this file.
+import { BRU_ISOLATE_SHIM } from '../isolated/shims/bru.shim.js';
+// axios facade over rq.sendRequest, exposed via require('axios') for Bruno's node:vm-native
+// scripts. Realm-agnostic like the bru shim; wraps globalThis.require (this engine's is the host
+// createRequireFn) so 'axios' resolves to the facade and everything else delegates unchanged.
+import { AXIOS_ISOLATE_SHIM } from '../isolated/shims/axios.shim.js';
 import { StreamHandle } from '../stream-handle.js';
 
 import { AsyncRegistry, SANDBOX_DEFAULT_TIMEOUT_MS } from '../index.js';
@@ -484,6 +493,16 @@ export class NodeSandbox implements Sandbox {
       // throw in the pre-request phase where `rq.response` is null.
       const postmanShims = createDeprecatedPostmanShims(built.rq, emitDeprecation);
       Object.defineProperties(vmContext, Object.getOwnPropertyDescriptors(postmanShims));
+
+      // Bruno dialect: install `bru`/`req`/`res` + bare `test`/`expect` against the now-built
+      // `rq`, then the axios→rq.sendRequest facade (which wraps `require`). Same source strings the
+      // Safe engine evaluates (#66 wired bru into the QuickJS realms only). Bruno's own scripts are
+      // node:vm-native — they `require('axios'|'uuid'|'xml2js'|…)` — so the Developer engine, not
+      // the sandboxed one, is where most real Bruno scripts run; without this they die on `bru is
+      // not defined`. Runs AFTER `built.rq` (the shims read `globalThis.rq`) and after `require`
+      // is injected (the axios shim wraps it), matching the isolated engine's order.
+      vm.runInContext(BRU_ISOLATE_SHIM, vmContext);
+      vm.runInContext(AXIOS_ISOLATE_SHIM, vmContext);
 
       // Wrap in async IIFE for top-level await support, with an in-realm try/catch
       // that captures the thrown error's `.stack` onto the error object itself

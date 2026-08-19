@@ -89,4 +89,33 @@ assert.ok(cr.cookieMutations.some((m) => m.kind === 'upsert' && m.cookie.name ==
 assert.equal(cr.mutationDiff.environment.cookieDone.localValue, 'yes', 'script continued past the cookie write');
 ok('rq.cookies.jar().set → allowlist-gated, drained as a cookie mutation');
 
-console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, chai-backed rq.test, delegated fetch, AND cookies — end to end.`);
+// 8. Bruno's `require('axios')` facade over rq.sendRequest — request mapping (params, method,
+//    JSON body), response shape ({data,status,statusText}), and axios's throw-on-non-2xx.
+let axiosCaptured = null;
+const axiosSend = async (req) => {
+  axiosCaptured = req;
+  return { status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' }, body: '{"pong":true}', bodyEncoding: 'utf8' };
+};
+const axiosGet = "const axios = require('axios'); const r = await axios.get('https://api.example.com/ping', { params: { q: 1 } }); bru.setEnvVar('out', r.status + ':' + r.statusText + ':' + r.data.pong);";
+const agr = await executeScript({ script: axiosGet, phase: 'pre-request', context, sendRequest: axiosSend });
+assert.ok(!agr.error, `no execution error (got: ${agr.error})`);
+assert.equal(axiosCaptured.url, 'https://api.example.com/ping?q=1', 'axios params → query string');
+assert.equal(axiosCaptured.method, 'GET', 'axios.get → GET');
+assert.equal(agr.mutationDiff.environment.out.localValue, '200:OK:true', 'axios response {status, statusText, data(json)}');
+ok("require('axios').get → rq.sendRequest: params + JSON response mapped");
+
+const axiosPost = "const axios = require('axios'); await axios.post('https://api.example.com/echo', { name: 'bruno' }); rq.environment.set('m', 'done');";
+const apr = await executeScript({ script: axiosPost, phase: 'pre-request', context, sendRequest: axiosSend });
+assert.ok(!apr.error, `no execution error (got: ${apr.error})`);
+assert.equal(axiosCaptured.method, 'POST', 'axios.post → POST');
+assert.ok(String(axiosCaptured.body?.raw ?? axiosCaptured.body ?? '').includes('"name":"bruno"'), 'axios object data → JSON raw body');
+ok("require('axios').post → method + JSON body mapped");
+
+const axios404 = async () => ({ status: 404, statusText: 'Not Found', headers: { 'content-type': 'application/json' }, body: '{"error":"nope"}', bodyEncoding: 'utf8' });
+const axiosThrow = "const axios = require('axios'); try { await axios.get('https://api.example.com/missing'); bru.setEnvVar('caught', 'no'); } catch (e) { bru.setEnvVar('caught', 'yes:' + e.response.status + ':' + (e.isAxiosError === true) + ':' + e.response.data.error); }";
+const atr = await executeScript({ script: axiosThrow, phase: 'pre-request', context, sendRequest: axios404 });
+assert.ok(!atr.error, `script handled the rejection (got: ${atr.error})`);
+assert.equal(atr.mutationDiff.environment.caught.localValue, 'yes:404:true:nope', 'axios rejects non-2xx with err.response{status,data}');
+ok('axios rejects on non-2xx with err.response (isAxiosError)');
+
+console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, chai-backed rq.test, delegated fetch, cookies, AND a Bruno axios facade — end to end.`);

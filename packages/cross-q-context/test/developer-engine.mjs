@@ -60,4 +60,48 @@ assert.equal(safeResult.mutationDiff.environment.token.localValue, 'dev', 'dispa
 assert.equal(safeResult.testResults[0].status, 'passed', 'safe engine assertion passed via the dispatcher');
 ok('DispatchingSandbox routes mode=safe to the lazily-loaded QuickJS engine');
 
+// 4. A BRUNO script on the developer engine. Bruno has no transform — the source runs verbatim
+// against the `bru`/`req` + bare `test`/`expect` runtime shim. Bruno's own scripts are node:vm-
+// native (they `require('uuid'|'nanoid'|…)`), so the developer engine is exactly where they run;
+// before the shim was wired here they died on `bru is not defined`.
+// bru.setVar writes the RUNTIME scope (transient, like Postman's pm.variables) which is not
+// persisted to mutationDiff — so its round-trip is asserted in-script via a test() instead.
+const bruSource = [
+  "bru.setEnvVar('token', 'bruno');",
+  "bru.setVar('copy', bru.getEnvVar('token'));",
+  "test('math', () => { expect(2 * 2).to.equal(4); });",
+  "test('req url', () => { expect(req.getUrl()).to.equal('https://example.com'); });",
+  "test('runtime var roundtrip', () => { expect(bru.getVar('copy')).to.equal('bruno'); });",
+].join('\n');
+const bruInput = {
+  script: bruSource,
+  phase: 'post-response',
+  mode: 'developer',
+  context,
+  entryId: 'bru-1',
+  entryType: 'http',
+  blacklistedPackages: [],
+};
+const bruResult = (await drain(await new NodeSandbox().execute(bruInput))).find((e) => e.type === 'result')?.result;
+assert.ok(bruResult && !bruResult.error, `no error (got: ${bruResult?.error})`);
+assert.equal(bruResult.mutationDiff.environment.token.localValue, 'bruno', 'bru.setEnvVar via node:vm');
+assert.equal(bruResult.testResults.length, 3, 'all three bare test() blocks ran');
+assert.ok(bruResult.testResults.every((t) => t.status === 'passed'), 'bare test/expect + req.getUrl + bru.getVar roundtrip passed');
+ok('NodeSandbox runs a BRUNO script (bru/req + bare test/expect) end-to-end');
+
+// 5. The dispatcher (the app's actual entry) runs Bruno on the developer engine too.
+const bruDispatched = (await drain(await new DispatchingSandbox(new NodeSandbox()).execute(bruInput))).find((e) => e.type === 'result')?.result;
+assert.equal(bruDispatched.mutationDiff.environment.token.localValue, 'bruno', 'dispatcher → developer engine runs Bruno');
+ok('DispatchingSandbox runs a Bruno script on the developer engine');
+
+// 6. require('axios') resolves to the facade in the developer engine (the shim wraps the node:vm
+// require). Behaviour (request/response/throw) is covered against a mock transport in execute-e2e;
+// here we prove the dev-engine wiring — the facade and its methods are what require() returns.
+const axiosLoadSrc =
+  "const axios = require('axios'); bru.setEnvVar('t', [typeof axios, typeof axios.get, typeof axios.post, typeof axios.create].join(':'));";
+const axiosLoad = (await drain(await new NodeSandbox().execute({ script: axiosLoadSrc, phase: 'post-response', mode: 'developer', context, entryId: 'ax-1', entryType: 'http', blacklistedPackages: [] }))).find((e) => e.type === 'result')?.result;
+assert.ok(axiosLoad && !axiosLoad.error, `no error (got: ${axiosLoad?.error})`);
+assert.equal(axiosLoad.mutationDiff.environment.t.localValue, 'function:function:function:function', "require('axios') → facade with get/post/create");
+ok("require('axios') resolves to the facade on the developer engine");
+
 console.log(`\nDeveloper engine OK — ${passed} checks. Both engines + the safe/developer picker run in cross-q-context.`);
