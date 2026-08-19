@@ -1253,6 +1253,7 @@ dependencies = [
  "clap",
  "cq-model",
  "cq-report",
+ "cq-transform",
  "cross-q",
  "crossterm",
  "flate2",

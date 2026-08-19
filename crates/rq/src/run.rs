@@ -549,6 +549,10 @@ fn reconcile(doc: &Document, name: &str, notes: &mut Vec<String>) -> Option<Stri
             }
             Some(result.code)
         }
+        // Bruno needs no rewrite: the runtime speaks `bru`/`req`/`res` natively, because its
+        // API is objects and calls all the way down. Postman is rewritten instead because its
+        // v1 forms are syntax — `tests['ok'] = expr` is an assignment no object can intercept.
+        "bru" | "bruno" => Some(source),
         other => {
             notes.push(format!(
                 "`-- {name} --` is written in the `{other}` dialect, which rq cannot translate \
