@@ -88,6 +88,23 @@ impl Finding {
 pub fn check(project: &Project, environment: Option<&str>) -> Vec<Finding> {
     let mut out = Vec::new();
 
+    // What the converter said, when rq read a foreign collection. rq does not validate
+    // Postman JSON or `.bru` syntax itself — that belongs to cross-q, which owns the formats
+    // and already did the work. What it must not do is swallow the answer: a source file that
+    // failed to parse is a request you have and rq does not, and reporting that as "1 dropped"
+    // next to "nothing to report" is how a check becomes a thing people stop reading.
+    for note in project.conversion_notes() {
+        let finding = if note.fatal {
+            Finding::error(&note.at, note.message.clone()).with_hint(
+                "this item is missing from what rq loaded — fix it at the source, or \
+                 `cq inspect` for the whole picture",
+            )
+        } else {
+            Finding::warn(&note.at, note.message.clone())
+        };
+        out.push(finding);
+    }
+
     // Files that looked like requests and weren't. The scan already worked this out; it is
     // reported here because `rq l` mentions it in passing and `rq check` is where someone
     // goes to find out what is wrong.

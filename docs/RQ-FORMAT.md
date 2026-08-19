@@ -437,6 +437,21 @@ Named so you don't have to discover it:
 | two requests sharing a short name | warning |
 | whatever the reader had to coerce | warning |
 
+When rq is reading a **foreign collection** (a Postman export, a Bruno tree), `check` also
+reports what the converter said while reading it, per file:
+
+| finding | level |
+|---|---|
+| a source item the converter could not complete (`broken.bru`: no HTTP method block) | error |
+| a source item that came through with less than it had (a body mode not modelled, a setting with no IR field) | warning |
+
+rq does not validate `.bru` syntax or Postman's schema itself — cross-q owns the formats and
+already did that work while reading. What `check` does is refuse to swallow the answer: a
+file that would not parse is a request you have and rq does not, and "1 dropped" next to
+"nothing to report" is how a check becomes something people stop reading. For the whole
+picture of a conversion, `cq inspect` and `rq import` are the tools that print every
+diagnostic.
+
 Warnings do not fail the command unless `--strict`; errors exit 1 either way. A name is
 "provided" if it is declared — by `vars:`, a `capture:`, a `-- form --` field, an ancestor
 collection, `.env`, or **any** environment. `-e <name>` narrows that last one to a single

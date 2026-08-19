@@ -33,6 +33,17 @@ pub use rq_doc::layout::{COLLECTION_FILE, DOTENV, ENVS_DIR, MARKER, STATE_DIR};
 /// A tree child: the name as written, and where its document lives.
 type Named = (String, PathBuf);
 
+/// One thing the converter said about the source, kept with its locator.
+#[derive(Clone, Debug)]
+pub struct ConversionNote {
+    /// True when the source item could not be read at all — a request that is missing from
+    /// what rq loaded, as opposed to one that came through with less than it had.
+    pub fatal: bool,
+    /// Which file (or which part of it) the converter was looking at.
+    pub at: String,
+    pub message: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Request,
@@ -101,6 +112,10 @@ pub enum Source {
         format: String,
         /// Absolute virtual path → contents.
         files: BTreeMap<PathBuf, String>,
+        /// What the converter had to say while reading it. Carried rather than summarised
+        /// away, because "1 dropped" and "`broken.bru`: no HTTP method block" are not the
+        /// same sentence — and a dropped request is a request you have that rq does not.
+        diagnostics: Vec<ConversionNote>,
     },
 }
 
@@ -190,6 +205,47 @@ pub fn readable_collections(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// A file whose NAME says what it is, which rq could not read.
+///
+/// "no rq project found" is a poor answer when `acme.postman_collection.json` is sitting
+/// right there. The useful answer names the file and says what the reader made of it —
+/// which is also the answer to "what would anyone do if the JSON is corrupted": be told
+/// which file, and why, instead of being told there is nothing here.
+fn announce_unreadable(dir: &Path) -> Option<anyhow::Error> {
+    let rd = std::fs::read_dir(dir).ok()?;
+    let mut named: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.ends_with(".postman_collection.json")
+                    || n == "bruno.json"
+                    || n == "collection.json"
+            })
+        })
+        .collect();
+    named.sort();
+    let candidate = named.first()?;
+    let name = candidate
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let format = if name == "bruno.json" {
+        "bruno"
+    } else {
+        "postman"
+    };
+    let mut report = cq_report::Report::new(cq_report::Fidelity::Lossless);
+    let why = match crate::import::to_project_map(candidate, Some(format), &mut report) {
+        Ok(_) => "it did not look like a collection when rq read it".to_string(),
+        Err(e) => e.to_string(),
+    };
+    Some(anyhow!(
+        "{name} is here but rq could not read it as {format}:\n  {why}"
+    ))
+}
+
 impl Project {
     /// Locate the project: an explicit `--project`, then `RQ_PROJECT`, then the marker
     /// walking up from `start` — and failing all of that, a collection sitting right here
@@ -219,7 +275,7 @@ impl Project {
             .or_else(|e| {
                 // Nothing of ours here. Before failing, look for something we can read anyway.
                 match readable_collections(start).as_slice() {
-                    [] => Err(e),
+                    [] => Err(announce_unreadable(start).unwrap_or(e)),
                     [one] => {
                         let (project, report) = Project::open_foreign(one, format)?;
                         Ok((project, Some(report)))
@@ -294,12 +350,40 @@ impl Project {
             .into_iter()
             .map(|(rel, content)| (root.join(rel), content))
             .collect();
+        let diagnostics = report
+            .diagnostics
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d.severity,
+                    cq_report::Severity::Coerced
+                        | cq_report::Severity::Dropped
+                        | cq_report::Severity::Error
+                )
+            })
+            .map(|d| ConversionNote {
+                // `Error` is the converter saying it could not complete an item — the
+                // request is not there. `Dropped`/`Coerced` came through with less than it
+                // had, which is worth knowing and is not the same thing.
+                fatal: d.severity == cq_report::Severity::Error,
+                at: if d.provenance.locator.is_empty() {
+                    from.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                } else {
+                    d.provenance.locator.clone()
+                },
+                message: d.message.clone(),
+            })
+            .collect();
         let project = Project::build(
             root,
             Source::Converted {
                 from: from.to_path_buf(),
                 format,
                 files,
+                diagnostics,
             },
         )?;
         Ok((project, report))
@@ -328,6 +412,14 @@ impl Project {
         match &self.source {
             Source::Converted { from, format, .. } => Some((from.as_path(), format.as_str())),
             Source::Disk => None,
+        }
+    }
+
+    /// What the converter said while reading the source. Empty for a project on disk.
+    pub fn conversion_notes(&self) -> &[ConversionNote] {
+        match &self.source {
+            Source::Converted { diagnostics, .. } => diagnostics,
+            Source::Disk => &[],
         }
     }
 
