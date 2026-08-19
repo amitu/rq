@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use rq::check;
 use rq::console;
 use rq::doc::Document;
 use rq::embedded;
@@ -110,6 +111,30 @@ enum Command {
         /// The project as JSON.
         #[arg(long)]
         json: bool,
+    },
+
+    /// Check every file the way a run would read it, and report what it would trip over.
+    #[command(alias = "lint")]
+    Check {
+        /// Check against this environment's variables; defaults to the active one.
+        #[arg(short = 'e', long, value_name = "NAME")]
+        environment: Option<String>,
+
+        /// Fail on warnings too, not only errors.
+        #[arg(long)]
+        strict: bool,
+
+        /// The findings as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Rewrite requests in their canonical form.
+    #[command(alias = "format")]
+    Fmt {
+        /// Report what would change and exit non-zero, without writing anything.
+        #[arg(long)]
+        check: bool,
     },
 
     /// Create an empty project in this directory.
@@ -281,6 +306,18 @@ fn dispatch(cli: &Cli) -> Result<i32> {
             let project = open(cli, &cwd)?;
             edit(&project, name)?;
             Ok(0)
+        }
+        Some(Command::Check {
+            environment,
+            strict,
+            json,
+        }) => {
+            let project = open(cli, &cwd)?;
+            check_project(&project, environment.as_deref(), *strict, *json)
+        }
+        Some(Command::Fmt { check }) => {
+            let project = open(cli, &cwd)?;
+            format_project(&project, *check)
         }
         Some(Command::Init { dir }) => {
             let dir = dir.clone().unwrap_or(cwd);
@@ -1130,6 +1167,116 @@ fn report_notes(report: &cq_report::Report) {
                 break;
             }
         }
+    }
+}
+
+/// `rq check` — what a run would trip over, before it does.
+///
+/// Exit code is the point: 1 when something cannot work, so this can be the thing CI runs on
+/// a directory of request files that people edit by hand. Warnings do not fail unless asked,
+/// because a run does not fail on them either.
+fn check_project(
+    project: &Project,
+    environment: Option<&str>,
+    strict: bool,
+    json: bool,
+) -> Result<i32> {
+    let findings = check::check(project, environment);
+    let errors = findings
+        .iter()
+        .filter(|f| f.level == check::Level::Error)
+        .count();
+    let warnings = findings.len() - errors;
+
+    if json {
+        let items: Vec<serde_json::Value> = findings
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "level": f.level.as_str(),
+                    "at": f.at,
+                    "message": f.message,
+                    "hint": f.hint,
+                })
+            })
+            .collect();
+        println!(
+            "{:#}",
+            serde_json::json!({
+                "errors": errors,
+                "warnings": warnings,
+                "findings": items,
+            })
+        );
+    } else {
+        for f in &findings {
+            let (mark, label) = match f.level {
+                check::Level::Error => (ui::red(ui::cross()), ui::red("error")),
+                check::Level::Warning => (ui::yellow(ui::warn_sign()), ui::yellow("warning")),
+            };
+            println!("{mark} {label} {}  {}", ui::bold(&f.at), f.message);
+            if let Some(hint) = &f.hint {
+                println!("    {}", ui::dim(hint));
+            }
+        }
+        let counted = project.requests().count();
+        if findings.is_empty() {
+            println!(
+                "{} {counted} request{} — nothing to report",
+                ui::green(ui::tick()),
+                if counted == 1 { "" } else { "s" }
+            );
+        } else {
+            println!(
+                "\n{counted} request{} · {errors} error{} · {warnings} warning{}",
+                if counted == 1 { "" } else { "s" },
+                if errors == 1 { "" } else { "s" },
+                if warnings == 1 { "" } else { "s" }
+            );
+        }
+    }
+
+    Ok(if errors > 0 || (strict && warnings > 0) {
+        1
+    } else {
+        0
+    })
+}
+
+/// `rq fmt` — one shape for a format people also write by hand.
+fn format_project(project: &Project, check_only: bool) -> Result<i32> {
+    if let Some((from, format)) = project.converted_from() {
+        bail!(
+            "{} is a {format} collection rq is reading, not a project it can write to\n  \
+             `rq import {}` first if you want rq's own files",
+            from.display(),
+            from.display()
+        );
+    }
+    let pending = check::unformatted(project);
+    if pending.is_empty() {
+        println!("{} already formatted", ui::green(ui::tick()));
+        return Ok(0);
+    }
+    for item in &pending {
+        if check_only {
+            println!("{} {}", ui::yellow(ui::warn_sign()), ui::bold(&item.at));
+        } else {
+            std::fs::write(&item.path, &item.formatted)
+                .with_context(|| format!("writing {}", item.path.display()))?;
+            println!("{} {}", ui::green(ui::tick()), ui::bold(&item.at));
+        }
+    }
+    let n = pending.len();
+    if check_only {
+        println!(
+            "\n{n} file{} would change — run `rq fmt`",
+            if n == 1 { "" } else { "s" }
+        );
+        Ok(1)
+    } else {
+        println!("\n{n} file{} rewritten", if n == 1 { "" } else { "s" });
+        Ok(0)
     }
 }
 

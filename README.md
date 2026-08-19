@@ -93,6 +93,8 @@ rq curl --save-as issues 'curl -H "Accept: application/vnd.github+json" \
 rq r issues        # run it — anytime, from anywhere in the project
 rq e issues        # open it in $EDITOR
 rq l               # the tree: every request, its method, what it depends on
+rq check           # what a run would trip over: broken parents, unset vars, bad captures
+rq fmt             # one shape for files people also edit by hand
 rq r me -c         # the console: arrow between the steps of a run, drill into each
 rq                 # the project's requests — bare `rq` is `rq l`
 rq l -c            # browse them instead: arrow to one, enter to run it
@@ -119,6 +121,17 @@ brings a collection in, and `cq convert ./my-apis --to bruno` takes it anywhere 
 `rq import` is that converter, not a second implementation of it.
 
 Full spec: [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md).
+
+**The files are edited by hand and by scripts, so there is a checker.** `rq check` reads
+every file the way a run would and reports what a run would trip over — a `parents:` naming a
+request that was renamed, a `capture:` path that can never match, a `-- view --` template that
+stopped parsing, a `{{TOKEN}}` nothing provides (which is *sent as written*, and comes back as
+a 401 that looks like a credentials problem). Errors exit 1; warnings do not unless you pass
+`--strict`, because a run does not fail on them either. `--json` for CI.
+
+`rq fmt` rewrites requests in their canonical form, and `rq fmt --check` fails without
+writing. Frontmatter keys and sections this build does not know are preserved verbatim —
+formatting a file must never be how you find out something was dropped.
 
 **You do not have to convert anything to start.** `rq` reads a Postman export, a Bruno
 collection or a file of curl commands *in place* — the same converter, run in memory,
