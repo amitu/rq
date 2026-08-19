@@ -155,6 +155,7 @@ fn walk_collection(
                                 i,
                                 parent_http,
                                 &req.auth,
+                                &req.scripts,
                             ));
                         }
                     }
@@ -181,6 +182,7 @@ fn example_item(
     index: usize,
     parent_http: &HttpRequest,
     parent_auth: &Option<cq_model::Auth>,
+    parent_scripts: &cq_model::Scripts,
 ) -> Value {
     let mut data = serde_json::Map::new();
     data.insert("type".into(), json!("http"));
@@ -196,6 +198,12 @@ fn example_item(
     }
     if let Some(resp) = ex.response.as_ref().and_then(map_response) {
         data.insert("response".into(), resp);
+    }
+    // Examples inherit the PARENT request's scripts (a Postman saved response carries no scripts of
+    // its own) — matching the app's `buildExamples`, which threads the parent's scripts through
+    // `buildRequestEntry(originalRequest, scripts, …)`.
+    if let Some(scripts) = rq_shape::scripts_object(parent_scripts) {
+        data.insert("scripts".into(), scripts);
     }
 
     let mut item = serde_json::Map::new();
