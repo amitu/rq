@@ -411,16 +411,29 @@ fn add_scripts(doc: &mut Document, scripts: &Scripts, rel: &str, report: &mut Re
         };
         doc.set_section(section, script.source.clone());
         if !matches!(script.dialect, ScriptDialect::Rq) {
-            report.coerced(
-                Phase::Emit,
-                provenance(rel),
-                format!(
-                    "`-- {section} --` is written in the {:?} dialect and was kept verbatim \
-                     (the converter never renames a script). rq executes rq.* — running this \
-                     one needs the dialect transform, which is not wired up yet",
-                    script.dialect
+            // The script is carried verbatim and the DIALECT IS RECORDED, which is the whole
+            // trick: a textual rename imports clean and throws at run time, while a recorded
+            // dialect lets the runtime reconcile the same source at execution, every time,
+            // against the transform rather than against a regex applied once.
+            let dialect = match script.dialect {
+                ScriptDialect::Pm => "pm",
+                ScriptDialect::Bru => "bru",
+                ScriptDialect::Hurl => "hurl",
+                ScriptDialect::Rq | ScriptDialect::Raw => "raw",
+            };
+            let existing = doc.front.script_dialect.clone();
+            match existing {
+                Some(prev) if prev != dialect => report.coerced(
+                    Phase::Emit,
+                    provenance(rel),
+                    format!(
+                        "`-- {section} --` is {dialect} but this request's other script is \
+                         {prev}; one file records one dialect, so {prev} was kept"
+                    ),
                 ),
-            );
+                Some(_) => {}
+                None => doc.front.script_dialect = Some(dialect.to_string()),
+            }
         }
     }
 }

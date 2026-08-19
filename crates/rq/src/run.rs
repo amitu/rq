@@ -217,7 +217,7 @@ pub fn run(
         let mut header_mutations: Vec<RequestHeaderMutation> = Vec::new();
         let mut skip = false;
 
-        for (label, source) in pre_chain(&inherited, &doc) {
+        for (label, source) in pre_chain(&inherited, &doc, &mut step_notes) {
             let input = script::ScriptExecutionInput {
                 script: source,
                 phase: ScriptPhase::PreRequest,
@@ -291,7 +291,7 @@ pub fn run(
         // collections — so a collection wraps its requests rather than merely preceding
         // them.
         if let Some(resp) = response.as_ref() {
-            for (label, source) in post_chain(&inherited, &doc) {
+            for (label, source) in post_chain(&inherited, &doc, &mut step_notes) {
                 let input = script::ScriptExecutionInput {
                     script: source,
                     phase: ScriptPhase::PostResponse,
@@ -461,13 +461,17 @@ pub struct CollectionScripts {
 }
 
 /// The pre-request chain: every enclosing collection outermost first, then the request.
-fn pre_chain(inherited: &Inherited, doc: &Document) -> Vec<(String, String)> {
+fn pre_chain(
+    inherited: &Inherited,
+    doc: &Document,
+    notes: &mut Vec<String>,
+) -> Vec<(String, String)> {
     let mut chain: Vec<(String, String)> = inherited
         .scripts
         .iter()
         .filter_map(|c| c.pre.clone().map(|s| (c.label.clone(), s)))
         .collect();
-    if let Some(own) = section(doc, "pre") {
+    if let Some(own) = reconcile(doc, "pre", notes) {
         chain.push(("this request".to_string(), own));
     }
     chain
@@ -475,9 +479,13 @@ fn pre_chain(inherited: &Inherited, doc: &Document) -> Vec<(String, String)> {
 
 /// The post-response chain: the request first, then outward — ADR-061's sandwich, so a
 /// collection's script *wraps* its requests instead of merely preceding them.
-fn post_chain(inherited: &Inherited, doc: &Document) -> Vec<(String, String)> {
+fn post_chain(
+    inherited: &Inherited,
+    doc: &Document,
+    notes: &mut Vec<String>,
+) -> Vec<(String, String)> {
     let mut chain: Vec<(String, String)> = Vec::new();
-    if let Some(own) = section(doc, "post") {
+    if let Some(own) = reconcile(doc, "post", notes) {
         chain.push(("this request".to_string(), own));
     }
     chain.extend(
@@ -494,6 +502,61 @@ fn section(doc: &Document, name: &str) -> Option<String> {
     doc.section(name)
         .filter(|s| !s.trim().is_empty())
         .map(str::to_string)
+}
+
+/// A script section, reconciled to the `rq.*` API the runtime speaks.
+///
+/// A collection converted from Postman carries its scripts **verbatim** with the dialect
+/// recorded — renaming someone's code textually imports clean and throws later. So the rename
+/// happens here instead, on the way to the engine, every run, by the same transform the app
+/// uses (`cq-transform`, OXC-based: it parses the script and rewrites identifiers in scope
+/// rather than string-replacing `pm.` and hoping).
+///
+/// `pm.*`, the legacy `postman.setEnvironmentVariable(…)`, and v1's `tests['x'] = expr` /
+/// `responseCode` / `responseBody` all come out as `rq.*`. A dialect with no transform (Bruno
+/// today) is left alone and says so, which is better than a half-translation.
+fn reconcile(doc: &Document, name: &str, notes: &mut Vec<String>) -> Option<String> {
+    let source = section(doc, name)?;
+    let dialect = doc
+        .front
+        .script_dialect
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .unwrap_or("rq")
+        .to_ascii_lowercase();
+
+    match dialect.as_str() {
+        "rq" | "raw" => Some(source),
+        "pm" | "postman" => {
+            let result =
+                cq_transform::full_transform(&source, cq_transform::types::Platform::Postman);
+            if !result.success {
+                notes.push(format!(
+                    "`-- {name} --` is a {dialect} script and could not be reconciled to rq.*; \
+                     it ran as written"
+                ));
+                return Some(source);
+            }
+            if result.summary.errors > 0 {
+                for d in result
+                    .diagnostics
+                    .iter()
+                    .filter(|d| matches!(d.kind, cq_transform::types::DiagnosticKind::Error))
+                {
+                    notes.push(format!("`-- {name} --`: {}", d.message));
+                }
+            }
+            Some(result.code)
+        }
+        other => {
+            notes.push(format!(
+                "`-- {name} --` is written in the `{other}` dialect, which rq cannot translate \
+                 yet — it ran as written, and will fail if it uses `{other}.*`"
+            ));
+            Some(source)
+        }
+    }
 }
 
 impl Inherited {
@@ -531,7 +594,10 @@ impl Inherited {
                 Some(AuthSpec::Inherit) | None => {}
                 Some(a) => out.auth = Some(a.clone()),
             }
-            let (pre, post) = (section(&doc, "pre"), section(&doc, "post"));
+            let (pre, post) = (
+                reconcile(&doc, "pre", notes),
+                reconcile(&doc, "post", notes),
+            );
             if pre.is_some() || post.is_some() {
                 out.scripts.push(CollectionScripts {
                     label: rel.clone(),

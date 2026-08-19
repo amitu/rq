@@ -41,6 +41,7 @@ hmac = "0.13.0"
 flate2 = "1.1.9"
 uuid = { version = "1.24.1", features = ["v4"] }
 getrandom = "0.4.3"
+cq-transform = { version = "0.1.0", path = "../cq-transform" }
 # Only to restore the default SIGPIPE handler — see `main`.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

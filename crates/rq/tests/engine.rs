@@ -299,6 +299,82 @@ fn case_a_refused_package_says_why(engine: Engine) {
     );
 }
 
+/// A Postman script, unmodified, running on rq's engine.
+///
+/// The collection is read in place, so this is the whole path a person takes: export from
+/// Postman, point rq at the file, run it. The script says `pm.*`; the runtime speaks `rq.*`;
+/// the file records `script_dialect: pm` and the transform reconciles the two at execution.
+fn case_a_postman_script_runs_unmodified(engine: Engine) {
+    let stub = Stub::start(1, |_| (200, "OK", "{\"id\":7}".into()));
+    let f = Fixture::new(engine.clone());
+    std::fs::write(
+        f.dir.path().join("acme.postman_collection.json"),
+        format!(
+            r#"{{ "info": {{ "name": "Acme", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" }},
+                 "item": [{{ "name": "thing", "request": {{ "method": "GET", "url": {{ "raw": "{}/thing" }} }},
+                   "event": [{{ "listen": "test", "script": {{ "exec": [
+                     "pm.environment.set('id', String(pm.response.json().id));",
+                     "console.log('ran on', pm.response.code);",
+                     "pm.test('is 200', function () {{ pm.expect(pm.response.code).to.eql(200); }});",
+                     "pm.test('has an id', function () {{ pm.expect(pm.response.json().id).to.eql(7); }});"
+                   ] }} }}] }}] }}"#,
+            stub.base
+        ),
+    )
+    .unwrap();
+
+    let (_, err, code) = f.run(&["--project", "./acme.postman_collection.json", "r", "thing"]);
+    assert_eq!(code, 0, "on the {} engine:\n{err}", engine.label());
+    assert!(err.contains("2/2 test(s) passed"), "{err}");
+    assert!(
+        err.contains("ran on 200"),
+        "console.log should reach the step:\n{err}"
+    );
+}
+
+/// Postman v1.0 — no `pm` at all: `tests['x'] = expr`, `responseCode`, `responseBody`. These
+/// are the collections that have been sitting in repositories since 2015, and they are the
+/// reason the transform matters more than a `pm.` → `rq.` rename would.
+fn case_a_postman_v1_script_runs_unmodified(engine: Engine) {
+    let stub = Stub::start(1, |_| (200, "OK", "hello".into()));
+    let f = Fixture::new(engine.clone());
+    std::fs::write(
+        f.dir.path().join("old.json"),
+        format!(
+            r#"{{ "id": "c1", "name": "Old", "requests": [
+                 {{ "id": "r1", "name": "thing", "method": "GET", "url": "{}/thing",
+                    "tests": "tests['is 200'] = responseCode.code === 200;\ntests['said hello'] = responseBody === 'hello';" }} ] }}"#,
+            stub.base
+        ),
+    )
+    .unwrap();
+
+    let (_, err, code) = f.run(&["--from", "postman", "--project", "./old.json", "r", "thing"]);
+    assert_eq!(code, 0, "on the {} engine:\n{err}", engine.label());
+    assert!(err.contains("2/2 test(s) passed"), "{err}");
+}
+
+/// The dialect is a document field, so it works in a hand-written file too: paste a Postman
+/// script into an rq request, say what it is, and it runs. Nothing about this is special to
+/// having been converted.
+fn case_script_dialect_is_something_you_can_write(engine: Engine) {
+    let stub = Stub::start(1, |_| (200, "OK", "{\"ok\":true}".into()));
+    let f = Fixture::new(engine.clone());
+    f.write(
+        "thing",
+        &format!(
+            "---\nurl: {}/thing\nscript_dialect: pm\n---\n\n-- post --\n\n\
+             pm.test('pasted straight from Postman', function () {{ \
+               pm.expect(pm.response.code).to.eql(200); }});\n",
+            stub.base
+        ),
+    );
+
+    let (_, err, code) = f.run(&["r", "thing"]);
+    assert_eq!(code, 0, "on the {} engine:\n{err}", engine.label());
+    assert!(err.contains("1/1 test(s) passed"), "{err}");
+}
+
 // The drivers: each case, on every engine this machine can run.
 
 #[test]
@@ -375,5 +451,38 @@ fn a_refused_package_says_why() {
             engine.label()
         );
         case_a_refused_package_says_why(engine);
+    }
+}
+
+#[test]
+fn a_postman_script_runs_unmodified() {
+    for engine in engines() {
+        eprintln!(
+            "── a_postman_script_runs_unmodified on the {} engine",
+            engine.label()
+        );
+        case_a_postman_script_runs_unmodified(engine);
+    }
+}
+
+#[test]
+fn a_postman_v1_script_runs_unmodified() {
+    for engine in engines() {
+        eprintln!(
+            "── a_postman_v1_script_runs_unmodified on the {} engine",
+            engine.label()
+        );
+        case_a_postman_v1_script_runs_unmodified(engine);
+    }
+}
+
+#[test]
+fn script_dialect_is_something_you_can_write() {
+    for engine in engines() {
+        eprintln!(
+            "── script_dialect_is_something_you_can_write on the {} engine",
+            engine.label()
+        );
+        case_script_dialect_is_something_you_can_write(engine);
     }
 }

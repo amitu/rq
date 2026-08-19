@@ -421,6 +421,27 @@ Named so you don't have to discover it:
   narrow the column in the template (`{{ i.title | truncate(60) }}`) if you want it short.
 - **Saved response examples** and data-driven iteration.
 
+### `script_dialect` — running someone else's script
+
+`-- pre --` and `-- post --` are written against `rq.*`. A request that came from another
+tool carries its script **verbatim**, with the SDK it was written against recorded:
+
+```yaml
+script_dialect: pm      # rq (default) · pm · bru
+```
+
+`pm` covers every Postman generation: `pm.*` (v2.x), the legacy `postman.setEnvironmentVariable(…)`,
+and v1.0's `tests['ok'] = responseCode.code === 200` / `responseBody`. Each run reconciles the
+source to `rq.*` through the same transform the app uses — an OXC parse and a scope-aware
+rewrite, not a string replacement — so the file keeps the script its author wrote and the
+runtime still sees one API.
+
+This is a document field, not an import artefact: writing it by hand is supported and is the
+short way to run a script you pasted out of Postman.
+
+`bru` is recorded but not yet translated; such a script runs as written, says so, and will
+fail if it actually uses `bru.*`.
+
 ### Checking and formatting
 
 `rq check` reads every file the way a run would and reports what a run would trip over:
