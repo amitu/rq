@@ -74,6 +74,11 @@ export const EXTERNAL_BUILTIN_PACKAGES = [
   },
   { id: 'ajv', entry: 'ajv', globalName: '__ajv', version: '8.17.1', safeModeClass: 'source_bundle' },
   { id: 'lodash', entry: 'lodash', globalName: '__lodash', version: '4.18.1', safeModeClass: 'source_bundle' },
+  // Bruno inbuilt libraries — its scripts `require('nanoid')` / `require('tv4')`. Pure JS:
+  // nanoid draws randomness from `crypto.getRandomValues` (the same Safe bridge crypto-js uses),
+  // tv4 is a dependency-free JSON-schema validator.
+  { id: 'nanoid', entry: 'nanoid', globalName: '__nanoid', version: '6.0.1', safeModeClass: 'source_bundle' },
+  { id: 'tv4', entry: 'tv4', globalName: '__tv4', version: '1.3.0', safeModeClass: 'source_bundle' },
   // Internal impl dependency of the response visualizer (ADR-202): compiled
   // in-guest at rq.visualizer.set() time. Delivered like any SOURCE_BUNDLE
   // built-in but `internal: true` suppresses the user-facing require() surface.

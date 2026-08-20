@@ -1,7 +1,7 @@
 {
   "name": "@requestly/cross-q-context",
   "version": "0.1.0",
-  "description": "cross-q-context \u2014 the API-client scripting core. This build ships the transform pillar: rewrite every script dialect (Postman pm.*/postman.*, Bruno bru.*) to the rq.* API (OXC-based Rust \u2192 WebAssembly, strings in / typed objects out). The execute pillar (the safe QuickJS engine) is the app's quickjs-emscripten runtime, absorbed here as JS \u2014 not a separate Rust runtime.",
+  "description": "cross-q-context — the API-client scripting core. This build ships the transform pillar: rewrite every script dialect (Postman pm.*/postman.*, Bruno bru.*) to the rq.* API (OXC-based Rust → WebAssembly, strings in / typed objects out). The execute pillar (the safe QuickJS engine) is the app's quickjs-emscripten runtime, absorbed here as JS — not a separate Rust runtime.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -86,8 +86,10 @@
     "handlebars": "4.7.9",
     "lodash": "4.17.21",
     "moment": "2.30.1",
+    "nanoid": "6.0.1",
     "prettier": "3.9.6",
     "tsx": "^4.19.2",
+    "tv4": "1.3.0",
     "typescript": "5.7.3",
     "uuid": "11.1.0",
     "xml2js": "0.6.2"
