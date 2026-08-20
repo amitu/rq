@@ -84,7 +84,20 @@ export const BRU_ISOLATE_SHIM = `
     cookies: rq.cookies,
     isSafeMode: rq.isSafeMode === true,
     cwd: unsupported('bru.cwd()'),
-    interpolate: unsupported('bru.interpolate()'),
+    // Resolve {{name}} against the variable scopes, rq's precedence (runtime > environment >
+    // collection > global). An unresolved template is left literal — matching how rq sends an
+    // unprovided {{TOKEN}} rather than fabricating a value. Flat names only: dot-paths, recursive
+    // resolution, and $dynamic vars ($guid, …) need the host resolver the guest realm can't reach.
+    interpolate: (str) => {
+      if (typeof str !== 'string') return str;
+      return str.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (match, name) => {
+        for (const scope of [runtime, env, collection, globals]) {
+          const v = scope.get(name);
+          if (v !== undefined && v !== null) return String(v);
+        }
+        return match;
+      });
+    },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
 

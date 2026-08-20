@@ -118,4 +118,17 @@ assert.ok(!atr.error, `script handled the rejection (got: ${atr.error})`);
 assert.equal(atr.mutationDiff.environment.caught.localValue, 'yes:404:true:nope', 'axios rejects non-2xx with err.response{status,data}');
 ok('axios rejects on non-2xx with err.response (isAxiosError)');
 
+// 9. bru.interpolate({{var}}) — resolves across scopes (runtime + environment), leaves an
+//    unresolved template literal (rq never fabricates an unprovided variable).
+const interpScript =
+  "bru.setEnvVar('host', 'api.example.com'); bru.setVar('id', '42'); bru.setEnvVar('out', bru.interpolate('https://{{host}}/u/{{id}}?x={{missing}}'));";
+const ir = await executeScript({ script: interpScript, phase: 'pre-request', context });
+assert.ok(!ir.error, `no execution error (got: ${ir.error})`);
+assert.equal(
+  ir.mutationDiff.environment.out.localValue,
+  'https://api.example.com/u/42?x={{missing}}',
+  'bru.interpolate resolves {{var}} across scopes and leaves unknowns literal',
+);
+ok('bru.interpolate resolves {{var}} across scopes');
+
 console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, chai-backed rq.test, delegated fetch, cookies, AND a Bruno axios facade — end to end.`);
