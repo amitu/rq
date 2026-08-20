@@ -669,12 +669,26 @@ pub(super) fn parse_request_obj(
                 .unwrap_or(Method::Get);
             let (url, query) = parse_url(r.get("url"), report, &format!("{locator}.url"));
             let path_variables = parse_path_vars(r.get("url"));
-            let headers = parse_kv_array(
-                field(r, "header", "headers"),
+            // v2 headers live under `header` (singular) per spec. Some published collections spell it
+            // `headers` (plural); we RECOVER that onto the request rather than read it hollow
+            // (see `v2_1_tolerates_plural_key_spellings`). But the raw-body contentType inference must
+            // use the SPEC `header` only — the app never consults `headers` (plural) — so a stray
+            // `Content-Type` recovered from the plural key does NOT flip a raw body to `json` (it would
+            // then diverge from the app, which keeps `raw`). Inference reads `spec_headers`; the request
+            // keeps the recovered superset.
+            let spec_headers =
+                parse_kv_array(r.get("header"), report, &format!("{locator}.header"));
+            let headers = if spec_headers.is_empty() {
+                parse_kv_array(r.get("headers"), report, &format!("{locator}.header"))
+            } else {
+                spec_headers.clone()
+            };
+            let body = parse_body(
+                r.get("body"),
+                &spec_headers,
                 report,
-                &format!("{locator}.header"),
+                &format!("{locator}.body"),
             );
-            let body = parse_body(r.get("body"), &headers, report, &format!("{locator}.body"));
             let auth = auth_fn(r.get("auth"), report, &format!("{locator}.auth"));
             (
                 HttpRequest {
@@ -738,9 +752,12 @@ pub(super) fn parse_examples(
     if let Some(Value::Array(items)) = v {
         for (i, resp) in items.iter().enumerate() {
             // Keep the source name verbatim (empty when absent) — the Requestly emitter owns
-            // the `Example N` fallback + trimming + length cap. Id is position-unique.
+            // the `Example N` fallback + trimming + length cap. The id must be GLOBALLY unique (it
+            // becomes the record tempId): the bare `pm-ex-{i}` index collides across requests (every
+            // request's first example is `pm-ex-0`), which makes the import tree ambiguous. Anchor
+            // the fallback on the parent request's locator so each example id is unique.
             let name = obj_str(resp, "name").unwrap_or_default();
-            let id = obj_str(resp, "id").unwrap_or_else(|| format!("pm-ex-{i}"));
+            let id = obj_str(resp, "id").unwrap_or_else(|| format!("{locator}-ex-{i}"));
             let loc = format!("{locator}.response[{i}]");
             // The saved response's `originalRequest` (when present) is the request that
             // produced it — parse it so exporters can emit the (request, response) pair.
