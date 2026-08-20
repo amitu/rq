@@ -131,4 +131,22 @@ assert.equal(
 );
 ok('bru.interpolate resolves {{var}} across scopes');
 
+// 10. req URL-part accessors + the headerList PropertyList (Bruno's #3 most-used API): setHeader,
+//     then .add / .get (case-insensitive) / .has / .count against the live request header store.
+// rq.request.url is readonly (ADR-167 — only headers mutate), so the URL is supplied via context.
+const urlCtx = { ...context, request: { ...context.request, url: 'https://api.example.com/v1/users?page=2' } };
+const reqShimScript = [
+  "req.setHeader('X-Test', '1');",
+  "req.headerList.add({ key: 'X-Added', value: 'yes' });",
+  "bru.setEnvVar('out', [req.getHost(), req.getPath(), req.getQueryString(), req.headerList.get('x-test'), req.headerList.has('X-Added'), req.headerList.count() >= 2].join('|'));",
+].join('\n');
+const rq2 = await executeScript({ script: reqShimScript, phase: 'pre-request', context: urlCtx });
+assert.ok(!rq2.error, `no execution error (got: ${rq2.error})`);
+assert.equal(
+  rq2.mutationDiff.environment.out.localValue,
+  'api.example.com|/v1/users|page=2|1|true|true',
+  'req.getHost/getPath/getQueryString + headerList.add/get/has/count over the live header store',
+);
+ok('req URL-part accessors + headerList PropertyList (get/has/add/count)');
+
 console.log(`\nE2E OK — ${passed} checks. cross-q-context transformed a Postman script and RAN it in QuickJS — variables, console, chai-backed rq.test, delegated fetch, cookies, AND a Bruno axios facade — end to end.`);
