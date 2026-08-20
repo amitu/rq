@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rq — a better curl, powered by collections</title>
+<meta name="description" content="A terminal API client that keeps your requests as plain Markdown files, converts whatever you have today, and tells you what it could not carry.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="./">rq</a>
+    <nav>
+      <a href="#start">Start</a>
+      <a href="#formats">Formats</a>
+      <a href="blog/">Blog</a>
+      <a href="https://github.com/amitu/rq">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1>A better curl, powered by collections.</h1>
+  <p class="lede">
+    Your requests are Markdown files in your repo. <code>rq</code> runs them, renders the
+    response as something you can read, and converts whatever you have today — telling you
+    plainly about anything it could not carry.
+  </p>
+
+  <div class="term"><span class="c">$</span> rq curl --save-as issues 'curl -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/anthropics/claude-code/issues?state=open"'
+<span class="g">✓</span> saved issues
+
+<span class="c">$</span> rq r issues
+<span class="b">▸</span> issues  GET .../issues?state=open  <span class="g">200 OK</span>  241ms
+
+  <span class="c">#1287</span>  Support for streaming responses      <span class="c">3 comments</span>
+  <span class="c">#1284</span>  Windows path handling in --project   <span class="c">1 comment</span>
+</div>
+
+  <p>
+    That last part is a template in the file, not a feature request. A request document can
+    render its own response, so the thing you look at fifty times a day is the thing you shaped.
+  </p>
+
+  <div class="file">
+    <div class="name">github/issues.md</div>
+<pre>---
+url: '{{api}}/repos/{{owner}}/{{repo}}/issues'
+query:
+  state: open
+vars:
+  GH_TOKEN: { env: GH_TOKEN, secret: true }
+capture:
+  first: response[0].number
+---
+
+-- view --
+
+{% for i in response %}
+- [**#{{ i.number }}**]({{ i.html_url }}) {{ i.title }}
+{% endfor %}</pre>
+  </div>
+
+  <h2 id="start">Getting started</h2>
+
+  <div class="note">
+    <strong>Pre-release.</strong> There are no packaged binaries yet — no Homebrew tap, no apt
+    repo. Today it builds from source with a Rust toolchain, and that is the honest state of it.
+  </div>
+
+  <div class="term"><span class="c">$</span> git clone https://github.com/amitu/rq &amp;&amp; cd rq
+<span class="c">$</span> cargo install --path crates/rq
+</div>
+
+  <p>You do not have to convert anything to try it. Point <code>rq</code> at what you already have:</p>
+
+  <div class="term"><span class="c">$</span> rq l acme.postman_collection.json
+<span class="c">reading acme.postman_collection.json in place as postman — 24 requests, nothing written</span>
+└── Acme/
+   ├── health       <span class="b">GET</span>   .../health
+   └── users/
+      ├── list      <span class="b">GET</span>   .../users?page=1
+      └── create    <span class="b">POST</span>  .../users
+</div>
+
+  <p>
+    Nothing is written to that folder — no project marker, no converted copies. It is the same
+    converter <code>rq import</code> runs, in memory. When you decide to keep it, import it.
+  </p>
+
+  <h2>What it does</h2>
+
+  <h3>Chains without JavaScript</h3>
+  <p>
+    A request declares what it depends on and what it takes from the response. The common case —
+    log in, use the token — needs no code at all.
+  </p>
+  <div class="file">
+    <div class="name">me.md</div>
+<pre>---
+url: '{{api}}/me'
+parents: [login]
+headers:
+  Authorization: 'Bearer {{token}}'
+---</pre>
+  </div>
+
+  <h3>Scripts, in whatever dialect they were written in</h3>
+  <p>
+    Postman's <code>pm.*</code> and Bruno's <code>bru.*</code> run unmodified. The file keeps the
+    script its author wrote; the runtime reconciles it at execution, every run. That covers
+    Postman v2.1, v2.0, and the v1.0 collections still sitting in repositories —
+    <code>tests['ok'] = responseCode.code === 200</code> and all.
+  </p>
+
+  <h3>A network panel for the terminal</h3>
+  <p>
+    <code>rq r issues -c</code> opens the run you just did: arrow between steps, drill into the
+    request, the response, every header, and where the milliseconds went. Nothing is re-sent —
+    a panel that re-issued your POST to show you what it did would be a bug. With
+    <code>--log</code> it reaches back past this process to everything you have sent.
+  </p>
+
+  <h3>Files people edit, so a checker</h3>
+  <div class="term"><span class="c">$</span> rq check
+<span class="r">✗ error</span>   me       `parents: [signin]` — no request named `signin`
+<span class="r">✗ error</span>   login    `capture: token: resposne.access_token` starts at `resposne`
+<span class="c">!</span> <span class="c">warning</span> me       `{{TOKEN}}` — nothing provides a value
+
+3 requests · 2 errors · 1 warning
+</div>
+  <p>
+    That last one is the interesting case. <code>rq</code> does not fail on an unresolved
+    variable — it sends <code>Bearer {{TOKEN}}</code> as written, and the 401 that comes back
+    looks like a credentials problem rather than a spelling one. So it is a warning, and
+    <code>rq check</code> never contradicts what a run actually does.
+  </p>
+
+  <h2 id="formats">Formats</h2>
+  <p>
+    Everything maps through one idealised model, so a new format is one importer or one
+    exporter, not glue against every other format.
+  </p>
+
+  <div class="scroll">
+  <table>
+    <tr><th>Format</th><th>Import</th><th>Export</th></tr>
+    <tr><td>Postman v2.1 / v2.0 / v1.0</td><td>yes</td><td>v2.1</td></tr>
+    <tr><td>Bruno <code>.bru</code> v2</td><td>yes</td><td>yes</td></tr>
+    <tr><td>rq (Markdown project)</td><td>yes</td><td>yes</td></tr>
+    <tr><td>cURL</td><td>yes</td><td>—</td></tr>
+    <tr><td>Requestly (<code>LOCAL_FS</code>, <code>MappedItems</code>)</td><td>—</td><td>yes</td></tr>
+    <tr><td>OpenAPI, Insomnia, HAR, <code>.http</code>, Hurl</td><td colspan="2">planned</td></tr>
+  </table>
+  </div>
+
+  <p>
+    Conversion is checked against collections other tools produced — usebruno's own 223-request
+    test collection, Adyen's published Postman collections, newman's samples — and each gate
+    asserts more than "it parsed": every request in the source has to survive into the model,
+    and round-trip loss has to stay inside a documented list. A conversion that drops something
+    says so.
+  </p>
+
+  <h2>Where this is</h2>
+  <p>
+    Version 0.1: the loop works end to end, and the packaging does not exist yet. There is a
+    longer account of the thinking and the current state in the first post.
+  </p>
+  <ul class="posts">
+    <li>
+      <span class="date">2026-08-20</span>
+      <a href="blog/first-version.html">rq 0.1: plain files, honest conversions, and what is still missing</a>
+    </li>
+  </ul>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    MIT licensed · no telemetry, no account ·
+    <a href="https://github.com/amitu/rq">github.com/amitu/rq</a>
+  </div>
+</footer>
+
+</body>
+</html>
