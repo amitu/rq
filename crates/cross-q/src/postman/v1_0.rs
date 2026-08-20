@@ -35,6 +35,14 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
     }
 
     let mut used: HashSet<String> = HashSet::new();
+    // Record ids already emitted as tempIds (folders AND requests). Malformed exports can reuse one
+    // `id` across siblings, or reference the same folder/request twice (via `folders_order` or a
+    // repeated `order` entry); the app then builds each reference into its own record. A tempId must
+    // stay globally unique or the bulkCreate import collides and the reconstructed tree is ambiguous
+    // (children can't tell which parent instance they belong to). Duplicates are disambiguated
+    // against this set; unique ids are untouched, so well-formed exports keep their source ids
+    // verbatim (roundtrip-stable).
+    let mut record_ids: HashSet<String> = HashSet::new();
     let mut items: Vec<Item> = Vec::new();
 
     // folder id → folder Value, for tree reconstruction.
@@ -56,17 +64,20 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
         }
     }
 
-    // Top-level requests first (`order`, excluding those inside folders) — matches the app.
-    for id in id_order(root.get("order")) {
-        if reqs_in_folders.contains(&id) || used.contains(&id) {
+    // Top-level requests first (`order`, excluding those inside folders) — matches the app, which
+    // builds one record per `order` entry. A repeated entry therefore yields a repeated record
+    // (disambiguated tempId); only folder-owned requests are skipped.
+    for (i, id) in id_order(root.get("order")).into_iter().enumerate() {
+        if reqs_in_folders.contains(&id) {
             continue;
         }
         if let Some(req) = by_id.get(&id) {
             used.insert(id.clone());
             items.push(Item::Request(Box::new(v1_request(
                 req,
+                &mut record_ids,
                 report,
-                &format!("order.{id}"),
+                &format!("order.{i}.{id}"),
             ))));
         }
     }
@@ -82,16 +93,19 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
             .map(|fs| fs.iter().filter_map(|f| shared::obj_str(f, "id")).collect())
             .unwrap_or_default(),
     };
-    for fid in &top_folder_ids {
+    for (i, fid) in top_folder_ids.iter().enumerate() {
         if let Some(f) = folders_by_id.get(fid) {
             let mut visited = HashSet::new();
             visited.insert(fid.clone());
             items.push(Item::Collection(Box::new(build_v1_folder(
                 f,
-                &format!("folder.{fid}"),
+                // Index-qualified so two references to the same folder id get distinct locators
+                // (the locator is what disambiguates a duplicate tempId below).
+                &format!("folder.{i}.{fid}"),
                 &by_id,
                 &folders_by_id,
                 &mut used,
+                &mut record_ids,
                 report,
                 visited,
             ))));
@@ -106,6 +120,7 @@ pub(super) fn parse(root: &Value, report: &mut Report) -> Workspace {
             if id.is_empty() || !used.contains(&id) {
                 items.push(Item::Request(Box::new(v1_request(
                     r,
+                    &mut record_ids,
                     report,
                     &format!("requests[{i}]"),
                 ))));
@@ -146,22 +161,32 @@ fn build_v1_folder<'a>(
     by_id: &BTreeMap<String, &'a Value>,
     folders_by_id: &BTreeMap<String, &'a Value>,
     used: &mut HashSet<String>,
+    record_ids: &mut HashSet<String>,
     report: &mut Report,
     visited: HashSet<String>,
 ) -> Collection {
     let fname = shared::obj_str(folder, "name").unwrap_or_else(|| "folder".to_string());
-    let fid =
+    let source_fid =
         shared::obj_str(folder, "id").unwrap_or_else(|| format!("pm-{}", shared::slugify(floc)));
+    // Keep the source id when unique; on a collision fall back to the (unique) locator so the
+    // record tempId stays globally unique. Well-formed exports never collide, so this is a no-op
+    // for them.
+    let fid = if record_ids.insert(source_fid.clone()) {
+        source_fid
+    } else {
+        format!("pm-{}", shared::slugify(floc))
+    };
 
     let mut children = Vec::new();
-    // Requests first.
-    for id in id_order(folder.get("order")) {
+    // Requests first (one record per `order` entry, disambiguated tempId on a repeat).
+    for (i, id) in id_order(folder.get("order")).into_iter().enumerate() {
         if let Some(req) = by_id.get(&id) {
             used.insert(id.clone());
             children.push(Item::Request(Box::new(v1_request(
                 req,
+                record_ids,
                 report,
-                &format!("{floc}.{id}"),
+                &format!("{floc}.{i}.{id}"),
             ))));
         }
     }
@@ -179,6 +204,7 @@ fn build_v1_folder<'a>(
                 by_id,
                 folders_by_id,
                 used,
+                record_ids,
                 report,
                 v,
             ))));
@@ -209,7 +235,12 @@ fn id_order(v: Option<&Value>) -> Vec<String> {
     }
 }
 
-fn v1_request(req: &Value, report: &mut Report, locator: &str) -> Request {
+fn v1_request(
+    req: &Value,
+    record_ids: &mut HashSet<String>,
+    report: &mut Report,
+    locator: &str,
+) -> Request {
     let name = shared::obj_str(req, "name").unwrap_or_else(|| "request".to_string());
     let method = req
         .get("method")
@@ -239,7 +270,16 @@ fn v1_request(req: &Value, report: &mut Report, locator: &str) -> Request {
         }
     }
 
-    let id = shared::obj_str(req, "id").unwrap_or_else(|| format!("pm-{}", shared::slugify(&name)));
+    let source_id =
+        shared::obj_str(req, "id").unwrap_or_else(|| format!("pm-{}", shared::slugify(&name)));
+    // Same global-uniqueness rule as folders: keep the source id when unique, else fall back to the
+    // (unique) locator so a request built from a repeated `order` entry — or one inside a folder
+    // reconstructed twice — gets its own tempId instead of colliding.
+    let id = if record_ids.insert(source_id.clone()) {
+        source_id
+    } else {
+        format!("pm-{}", shared::slugify(locator))
+    };
     // v1 requests carry a v2.1-style `auth` object (type + `<type>[]` params) when set; an
     // absent one means inherit (the app's `mapAuth(undefined)`). currentHelper/helperAttributes
     // are the legacy UI mirror and are NOT the auth source — matching the app.

@@ -17,7 +17,10 @@ path = "src/lib.rs"
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
+# preserve_order: OpenAPI example bodies are synthesized from schema `properties`, and the app
+# preserves that declaration order in the generated JSON — so cross-q must too (a BTreeMap would
+# alphabetize the keys and diverge). Order-preserving Value flows through $ref deref + synthesis.
+serde_json = { workspace = true, features = ["preserve_order"] }
 serde_yaml = "0.9"
 clap.workspace = true
 anyhow.workspace = true
