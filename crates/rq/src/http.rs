@@ -24,6 +24,9 @@ pub struct Prepared {
     pub timeout_ms: Option<u64>,
     pub follow_redirects: bool,
     pub verify_tls: bool,
+    /// `{{names}}` nothing provided a value for. A request is never sent with any: see
+    /// `run::send_or_refuse`.
+    pub missing: Vec<String>,
 }
 
 impl Prepared {

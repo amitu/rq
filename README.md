@@ -140,17 +140,22 @@ Full spec: [`docs/RQ-FORMAT.md`](docs/RQ-FORMAT.md).
 **The files are edited by hand and by scripts, so there is a checker.** `rq check` reads
 every file the way a run would and reports what a run would trip over — a `parents:` naming a
 request that was renamed, a `capture:` path that can never match, a `-- view --` template that
-stopped parsing, a `{{TOKEN}}` nothing provides (which is *sent as written*, and comes back as
-a 401 that looks like a credentials problem). Errors exit 1; warnings do not unless you pass
-`--strict`, because a run does not fail on them either. `--json` for CI.
+stopped parsing, a `{{TOKEN}}` nothing provides. Errors exit 1; warnings do not unless you
+pass `--strict`, because a run does not fail on them either. `--json` for CI.
+
+A placeholder never reaches the wire: a request still carrying `{{TOKEN}}` is **not sent**, and
+the run says which variable and how to supply it. `Bearer {{TOKEN}}` would come back 401 and
+read like a credentials problem, sending you to the API instead of to your file. Declaring a
+variable is how you say it may legitimately be empty — an empty credential is dropped, not
+sent — and `required: true` is how you say it may not.
 
 `rq fmt` rewrites requests in their canonical form, and `rq fmt --check` fails without
 writing. Frontmatter keys and sections this build does not know are preserved verbatim —
 formatting a file must never be how you find out something was dropped.
 
 **You do not have to convert anything to start.** `rq` reads a Postman export, a Bruno
-collection or a file of curl commands *in place* — the same converter, run in memory,
-writing nothing:
+collection or a file of curl commands *in place* — the same converter `rq import` runs, in
+memory:
 
 ```bash
 rq l acme.postman_collection.json      # its requests, as a tree
@@ -158,10 +163,10 @@ rq r health                            # run one
 rq --project ./bruno-collection l      # a directory works the same way
 ```
 
-Drop into a folder that has one and bare `rq` finds it. Nothing is written to that folder —
-no project marker, no `.rq/`, no converted copies — so a collection someone sent you is
-runnable before you have decided whether to keep it. When you do decide, `rq import <file>`
-writes the project out, and it is the same conversion you were already running.
+Drop into a folder that has one and bare `rq` finds it. The collection stays exactly as it
+is, so something a colleague sent you is runnable before you have decided whether to keep it.
+When you decide to keep it, `rq import <file>` makes it an rq project — the same conversion
+you were already running, saved this time.
 
 **Scripts run.** `-- pre --` and `-- post --` execute on
 [cross-q-context](packages/cross-q-context) — the same QuickJS engine and the same `rq.*`

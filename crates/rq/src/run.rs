@@ -298,7 +298,7 @@ pub fn run(
                     prepared.headers.push(("Cookie".into(), cookie));
                 }
             }
-            let response = http::send(&prepared).with_context(|| entry.rel.clone())?;
+            let response = send_or_refuse(&prepared, &entry.rel)?;
             jar.ingest(&prepared.full_url(), &response.headers);
             Some(response)
         };
@@ -728,13 +728,8 @@ pub fn prepare(
 
     let body = build_payload(doc, &headers, &mut sub)?;
 
-    for m in &missing {
-        notes.push(format!(
-            "`{{{{{m}}}}}` has no value; it was left as written"
-        ));
-    }
-
     Ok(Prepared {
+        missing,
         method: front.method.clone().unwrap_or_else(|| "GET".into()),
         url,
         query,
@@ -812,6 +807,38 @@ fn apply_auth(
 /// a `{{template}}` — a collection can declare `Bearer {{GH_TOKEN}}` for everyone and stay
 /// usable by someone who hasn't set a token, instead of turning every public request into
 /// a 401.
+/// Send the request — unless it still has a `{{name}}` in it, in which case refuse.
+///
+/// A placeholder that reaches the wire is **always** a bug. `Authorization: Bearer {{TOKEN}}`
+/// comes back 401 and reads like a credentials problem; `{{api}}/users` 404s for a reason that
+/// has nothing to do with the API. Both send you looking in the wrong place, and the request
+/// has already been made by the time you start. Failing here costs one command.
+///
+/// This is why a **declared** variable is not the same thing: declaring it is the author
+/// saying the name exists and may legitimately be empty, so it resolves to empty and the auth
+/// layer drops an empty credential rather than sending one. What stops a run is a name nobody
+/// declared and nothing supplied — which is a typo, or a `--var` you meant to pass.
+fn send_or_refuse(prepared: &Prepared, rel: &str) -> Result<Response> {
+    if !prepared.missing.is_empty() {
+        let names = prepared
+            .missing
+            .iter()
+            .map(|n| format!("`{{{{{n}}}}}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let one = prepared.missing.len() == 1;
+        bail!(
+            "{rel}: {names} {} no value, so the request was not sent\n  \
+             declare {} under `vars:`, put {} in the environment, or pass `--var {}=…`",
+            if one { "has" } else { "have" },
+            if one { "it" } else { "them" },
+            if one { "it" } else { "them" },
+            prepared.missing[0],
+        );
+    }
+    http::send(prepared).with_context(|| rel.to_string())
+}
+
 fn usable(credential: &str) -> bool {
     !credential.trim().is_empty() && !credential.contains("{{")
 }
@@ -1306,10 +1333,18 @@ mod tests {
     }
 
     #[test]
-    fn an_unresolved_variable_is_noted_and_left_intact() {
-        let (p, notes) = prep("---\nurl: https://api.test/{{owner}}\n---\n", &[]);
+    fn an_unresolved_variable_is_carried_out_and_stops_the_send() {
+        // `prepare` still substitutes what it can and leaves the rest alone — it has to, since
+        // a pre-request script may yet set the value and the request is re-prepared after
+        // every script. What changed is the ending: the name comes out in `missing`, and
+        // `send_or_refuse` will not put it on the wire.
+        let (p, _) = prep("---\nurl: https://api.test/{{owner}}\n---\n", &[]);
         assert_eq!(p.url, "https://api.test/{{owner}}");
-        assert!(notes[0].contains("owner"), "{notes:?}");
+        assert_eq!(p.missing, vec!["owner".to_string()]);
+        assert!(
+            send_or_refuse(&p, "thing").is_err(),
+            "a request carrying `{{{{owner}}}}` must not be sent"
+        );
     }
 
     #[test]

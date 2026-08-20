@@ -80,7 +80,7 @@ capture:
   <p>You do not have to convert anything to try it. Point <code>rq</code> at what you already have:</p>
 
   <div class="term"><span class="c">$</span> rq l acme.postman_collection.json
-<span class="c">reading acme.postman_collection.json in place as postman — 24 requests, nothing written</span>
+<span class="c">reading acme.postman_collection.json in place as postman — 24 requests</span>
 └── Acme/
    ├── health       <span class="b">GET</span>   .../health
    └── users/
@@ -89,8 +89,8 @@ capture:
 </div>
 
   <p>
-    Nothing is written to that folder — no project marker, no converted copies. It is the same
-    converter <code>rq import</code> runs, in memory. When you decide to keep it, import it.
+    The collection stays exactly as it is — this is the same converter <code>rq import</code>
+    runs, in memory. When you want it as an rq project, import it.
   </p>
 
   <h2>What it does</h2>
@@ -130,15 +130,17 @@ headers:
   <div class="term"><span class="c">$</span> rq check
 <span class="r">✗ error</span>   me       `parents: [signin]` — no request named `signin`
 <span class="r">✗ error</span>   login    `capture: token: resposne.access_token` starts at `resposne`
-<span class="c">!</span> <span class="c">warning</span> me       `{{TOKEN}}` — nothing provides a value
+<span class="r">✗ error</span>   me       `{{TOKEN}}` — nothing provides a value
 
-3 requests · 2 errors · 1 warning
+3 requests · 3 errors · 0 warnings
 </div>
   <p>
-    That last one is the interesting case. <code>rq</code> does not fail on an unresolved
-    variable — it sends <code>Bearer {{TOKEN}}</code> as written, and the 401 that comes back
-    looks like a credentials problem rather than a spelling one. So it is a warning, and
-    <code>rq check</code> never contradicts what a run actually does.
+    All three are errors, and the last one is the policy in miniature: a request still carrying
+    <code>{{TOKEN}}</code> is <strong>not sent</strong>. Putting a placeholder on the wire is
+    always a bug — <code>Bearer {{TOKEN}}</code> comes back 401 and reads like a credentials
+    problem, so you go looking at the API instead of at your file, and the request has already
+    gone out. Failing costs one command. Declaring a variable is how you say it may
+    legitimately be empty.
   </p>
 
   <h2 id="formats">Formats</h2>

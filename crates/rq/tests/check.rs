@@ -130,24 +130,22 @@ fn a_body_file_that_is_not_there_is_an_error() {
 }
 
 #[test]
-fn a_variable_nothing_provides_is_a_warning_not_an_error() {
+fn a_variable_nothing_provides_is_an_error() {
     let f = Fixture::new();
     f.write(
         "me.md",
         "---\nurl: https://api.test/me\nheaders:\n  Authorization: Bearer {{TOKEN}}\n---\n",
     );
 
-    // A run does not fail on this — it notes it and sends `Bearer {{TOKEN}}` as written, which
-    // comes back 401 and reads like a credentials problem. So: reported, but not an error,
-    // because check must not disagree with what a run does.
+    // A run refuses to send a request carrying `{{TOKEN}}`, so this is an error rather than a
+    // warning — `check` and `run` have to agree about what is fatal. `Bearer {{TOKEN}}` on the
+    // wire comes back 401 and reads like a credentials problem, which is a debugging afternoon
+    // bought with a request that should never have left.
     let (out, code) = f.run(&["check"]);
-    assert_eq!(code, 0, "{out}");
+    assert_eq!(code, 1, "{out}");
     assert!(out.contains("TOKEN"), "{out}");
-    assert!(out.contains("warning"), "{out}");
-
-    // Unless you ask for it to matter, which is what CI wants.
-    let (_, code) = f.run(&["check", "--strict"]);
-    assert_eq!(code, 1);
+    assert!(out.contains("error"), "{out}");
+    assert!(out.contains("1 error"), "and it is counted as one: {out}");
 }
 
 #[test]
@@ -220,19 +218,29 @@ fn findings_come_out_as_json_for_ci() {
         "me.md",
         "---\nurl: https://api.test/me?t={{TOKEN}}\nparents: [nope]\n---\n",
     );
+    // And one that only warns, so the JSON carries both levels.
+    f.write("dup/one.md", "---\nurl: https://api.test/a\n---\n");
+    f.write("dup/two/one.md", "---\nurl: https://api.test/b\n---\n");
 
     let (out, code) = f.run(&["check", "--json"]);
     assert_eq!(code, 1, "{out}");
     let v: serde_json::Value = serde_json::from_str(out.trim()).expect("valid JSON");
-    assert_eq!(v["errors"], 1, "{v:#}");
-    assert_eq!(v["warnings"], 1, "{v:#}");
+    assert_eq!(
+        v["errors"], 2,
+        "a bad parent and an unprovided variable: {v:#}"
+    );
+    assert_eq!(v["warnings"], 1, "the shared short name: {v:#}");
     let levels: Vec<&str> = v["findings"]
         .as_array()
         .unwrap()
         .iter()
         .map(|f| f["level"].as_str().unwrap())
         .collect();
-    assert_eq!(levels, vec!["error", "warning"], "worst first: {v:#}");
+    assert_eq!(
+        levels,
+        vec!["error", "error", "warning"],
+        "worst first: {v:#}"
+    );
 }
 
 #[test]
