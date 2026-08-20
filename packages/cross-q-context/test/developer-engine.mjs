@@ -104,4 +104,18 @@ assert.ok(axiosLoad && !axiosLoad.error, `no error (got: ${axiosLoad?.error})`);
 assert.equal(axiosLoad.mutationDiff.environment.t.localValue, 'function:function:function:function', "require('axios') → facade with get/post/create");
 ok("require('axios') resolves to the facade on the developer engine");
 
+// 7. Bruno inbuilt libraries nanoid + tv4 resolve via require() and run in BOTH engines. nanoid
+// draws from crypto.getRandomValues (the Safe crypto bridge / real node crypto); tv4 is pure JS.
+const libScript =
+  "const { nanoid } = require('nanoid'); const tv4 = require('tv4'); const id = nanoid(); bru.setEnvVar('lib', typeof id + ':' + (id.length > 10) + ':' + tv4.validate({ n: 5 }, { type: 'object', properties: { n: { type: 'number' } } }));";
+const libInput = { script: libScript, phase: 'post-response', mode: 'developer', context, entryId: 'lib-1', entryType: 'http', blacklistedPackages: [] };
+const libDispatcher = new DispatchingSandbox(new NodeSandbox());
+const devLib = (await drain(await libDispatcher.execute({ ...libInput, mode: 'developer' }))).find((e) => e.type === 'result')?.result;
+assert.ok(devLib && !devLib.error, `no error (got: ${devLib?.error})`);
+assert.equal(devLib.mutationDiff.environment.lib.localValue, 'string:true:true', 'nanoid + tv4 in the developer engine');
+const safeLib = (await drain(await libDispatcher.execute({ ...libInput, mode: 'safe' }))).find((e) => e.type === 'result')?.result;
+assert.ok(safeLib && !safeLib.error, `no error (got: ${safeLib?.error})`);
+assert.equal(safeLib.mutationDiff.environment.lib.localValue, 'string:true:true', 'nanoid + tv4 in the safe engine');
+ok('Bruno inbuilt libs nanoid + tv4 run via require() in both engines');
+
 console.log(`\nDeveloper engine OK — ${passed} checks. Both engines + the safe/developer picker run in cross-q-context.`);

@@ -72,6 +72,18 @@ export declare const EXTERNAL_BUILTIN_PACKAGES: readonly [{
     readonly version: "4.18.1";
     readonly safeModeClass: "source_bundle";
 }, {
+    readonly id: "nanoid";
+    readonly entry: "nanoid";
+    readonly globalName: "__nanoid";
+    readonly version: "6.0.1";
+    readonly safeModeClass: "source_bundle";
+}, {
+    readonly id: "tv4";
+    readonly entry: "tv4";
+    readonly globalName: "__tv4";
+    readonly version: "1.3.0";
+    readonly safeModeClass: "source_bundle";
+}, {
     readonly id: "handlebars";
     readonly entry: "handlebars";
     readonly globalName: "__handlebars";
