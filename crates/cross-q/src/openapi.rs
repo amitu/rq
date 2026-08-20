@@ -474,6 +474,14 @@ impl<'a> RootBuilder<'a> {
                 None => continue,
             };
             let node = root.get_or_create(path);
+            // Path-level `servers` override → a base_url collection variable on this folder.
+            if let Some(first) = path_item
+                .get("servers")
+                .and_then(Value::as_array)
+                .and_then(|s| s.first())
+            {
+                node.variables = vec![make_var("base_url", &resolve_server_url(first), 0)];
+            }
             for method in HTTP_METHODS {
                 if let Some(op) = path_item.get(*method) {
                     let req = self.build_request(path, method, path_item, op);
@@ -655,7 +663,7 @@ impl<'a> RootBuilder<'a> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("{code} {}", status_text(code)));
-            let response = response_body(resp);
+            let response = build_example_response(code, resp);
             out.push(cq_model::Example {
                 meta: RecordMeta::new(format!("oa-ex-{code}"), name, SourceFormat::OpenApi),
                 request: None,
@@ -668,12 +676,37 @@ impl<'a> RootBuilder<'a> {
 }
 
 /// The response body value stored on an example (from the first content media type's example).
-fn response_body(resp: &Value) -> Option<Value> {
+/// The example's saved response, in the Postman-saved-response shape `mappeditems::map_response`
+/// consumes (`{ code, status, body, header[] }`). Built from the first content media type's
+/// example; a `Content-Type` header is emitted only for JSON media types (the body is always
+/// JSON-stringified, so claiming a non-JSON content type would be untruthful). A response with no
+/// content yields no saved response (a response-less example), matching the app.
+fn build_example_response(code: &str, resp: &Value) -> Option<Value> {
     let content = resp.get("content").and_then(Value::as_object)?;
-    let first = content.keys().next()?;
-    Some(Value::String(stringify_example(&media_type_example(
-        &content[first],
-    ))))
+    let (media_type, media) = content.iter().next()?;
+    let body = stringify_example(&media_type_example(media));
+    let mut header = Vec::new();
+    if is_json_media_type(media_type) {
+        header.push(serde_json::json!({ "key": "Content-Type", "value": media_type }));
+    }
+    // The app uses the response DESCRIPTION as the example's statusText (same source as the
+    // example name), falling back to the HTTP status text.
+    let status_text_value = resp
+        .get("description")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| status_text(code).to_string());
+    Some(serde_json::json!({
+        "code": code.parse::<u64>().unwrap_or(0),
+        "status": status_text_value,
+        "body": body,
+        "header": header,
+    }))
+}
+
+fn is_json_media_type(mt: &str) -> bool {
+    mt == "application/json" || mt.ends_with("+json")
 }
 
 /// media-type example precedence: `example` → first `examples` entry (unwrapping `{value}`) →
@@ -839,6 +872,9 @@ struct TreeNode {
     /// Child folders, in insertion order, keyed by segment.
     children: Vec<(String, TreeNode)>,
     requests: Vec<Request>,
+    /// Collection variables for this folder — a path-level `servers` override lands a `base_url`
+    /// here (the app puts the override on the path's folder, not the root).
+    variables: Vec<Variable>,
 }
 
 impl TreeNode {
@@ -861,8 +897,10 @@ impl TreeNode {
     fn into_items(self) -> Vec<Item> {
         let mut items: Vec<Item> = Vec::new();
         for (seg, child) in self.children {
+            let variables = child.variables.clone();
             let collection = Collection {
                 meta: RecordMeta::new(format!("oa-seg-{}", slug(&seg)), seg, SourceFormat::OpenApi),
+                variables,
                 items: child.into_items(),
                 ..Default::default()
             };
