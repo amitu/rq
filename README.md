@@ -239,6 +239,26 @@ rm .rq/cookies.json                     # and that is how you log out
 There is no `rq cookies list` or `rq cookies clear`, because there is nothing worth wrapping:
 the path is explicit, so `cat` and `rm` already do it.
 
+## The network log
+
+The console is a panel over the run you just did, because that is all one process knows.
+`--log` makes it a panel over your work:
+
+```bash
+rq r issues --log                  # append to .rq/log.jsonl (gitignored)
+rq r issues --log ~/net.jsonl      # or wherever
+rq r issues --log -c               # the console; backspace opens everything sent before
+tail -f .rq/log.jsonl              # it is a file
+jq -c 'select(.status >= 500)' .rq/log.jsonl
+rm .rq/log.jsonl                   # and that is how you clear it
+```
+
+**JSONL, one object per request.** Appending is a write rather than a read-modify-write, so
+two `rq` processes finishing at once cannot lose each other's requests; a torn write costs one
+line instead of the whole history; and `tail`, `jq` and `wc -l` already work on it. Secrets are
+redacted on the way in, with the same list the terminal redacts with — a log outlives the run,
+and it should not keep the credential the run only borrowed.
+
 ## Piping, scripts and CI
 
 One rule: **stdout is the result, stderr is the narration, and the result is the same

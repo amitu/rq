@@ -122,6 +122,7 @@ impl<'a> Console<'a> {
             history: Vec::new(),
             step: 0,
             ..Console::new(Run {
+                log_id: None,
                 steps: Vec::new(),
                 view: None,
                 raw: String::new(),
@@ -1086,13 +1087,36 @@ fn fill_loop(state: &mut FormState, out: &mut io::Stdout) -> Result<Option<Vec<(
 /// Open the console over a finished run and block until the user quits. With a [`Nav`],
 /// its links are live.
 pub fn open(run: Run, nav: Option<Nav<'_>>) -> Result<()> {
-    if run.steps.is_empty() {
+    open_with_past(run, nav, Vec::new())
+}
+
+/// Open the console with earlier requests behind the current run.
+///
+/// `past` is what `--log` read back: every request from previous invocations, as one page you
+/// reach with `backspace`. That is the whole difference between a panel over this process and
+/// a panel over your work — and it needed no new pane, because "everything before" is just
+/// another page in the history the console already keeps.
+pub fn open_with_past(run: Run, nav: Option<Nav<'_>>, past: Vec<Step>) -> Result<()> {
+    if run.steps.is_empty() && past.is_empty() {
         return Ok(());
     }
     let mut console = match nav {
         Some(nav) => Console::with_nav(run, nav),
         None => Console::new(run),
     };
+    if !past.is_empty() {
+        let earlier = Run {
+            log_id: None,
+            steps: past,
+            view: None,
+            raw: String::new(),
+            vars: Vec::new(),
+            notes: vec!["earlier requests, from the log".into()],
+            secrets: Vec::new(),
+        };
+        console.history.insert(0, earlier);
+        console.cursor += 1;
+    }
     draw(&mut console)
 }
 
@@ -1185,6 +1209,7 @@ mod tests {
 
     fn run_of(steps: Vec<Step>) -> Run {
         Run {
+            log_id: None,
             steps,
             view: Some("# hello".into()),
             raw: "{}".into(),

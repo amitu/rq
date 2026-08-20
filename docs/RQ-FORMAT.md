@@ -463,6 +463,19 @@ The jar lives for one run and is not persisted, because session cookies are cred
 The file is the entire interface — read it, delete it, point two projects at the same one,
 keep one per environment. rq adds no commands around it because a path needs none.
 
+### The network log
+
+| | |
+|---|---|
+| `--log` | `.rq/log.jsonl` under the project (gitignored) |
+| `--log <file>` | exactly that file |
+
+One JSON object per request, appended. With it, the console's `backspace` reaches a page of
+everything sent before this process — the same panes, on a request from last week. Bodies are
+included (a panel that cannot show you the body is a list of URLs) and capped at 64 KB each.
+Captures, tests and script output are **not** replayed: they belong to the run that produced
+them.
+
 ### Checking and formatting
 
 `rq check` reads every file the way a run would and reports what a run would trip over:
