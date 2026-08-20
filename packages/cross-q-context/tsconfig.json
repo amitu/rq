@@ -14,5 +14,5 @@
     "rootDir": "./src"
   },
   "include": ["src/runtime/**/*"],
-  "exclude": ["src/runtime/definitions/codegen", "src/runtime/**/__tests__/**", "src/runtime/**/*.test.ts"]
+  "exclude": ["src/runtime/definitions/codegen", "src/runtime/engine/vendor-codegen/generate-vendor-iifes.ts", "src/runtime/**/__tests__/**", "src/runtime/**/*.test.ts"]
 }
