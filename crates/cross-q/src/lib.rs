@@ -12,6 +12,7 @@ pub mod emit_postman;
 pub mod emit_rq;
 pub mod emit_rq_md;
 pub mod mappeditems;
+pub mod openapi;
 pub mod postman;
 pub mod rq_md;
 pub mod rq_shape;
@@ -101,6 +102,7 @@ pub fn build_workspace(
         "curl" => curl_to_workspace(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         "postman" => postman::parse_postman(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         "bruno" => bruno::parse_bruno(input, report).map_err(|e| anyhow::anyhow!("{e}")),
+        "openapi" => openapi::parse_openapi(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         "rq" => rq_md::parse_rq_md(input, report).map_err(|e| anyhow::anyhow!("{e}")),
         other => {
             anyhow::bail!(
