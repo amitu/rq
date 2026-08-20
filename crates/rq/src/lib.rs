@@ -8,6 +8,7 @@ pub mod embedded;
 pub mod graph;
 pub mod http;
 pub mod import;
+pub mod log;
 pub mod project;
 pub mod render;
 pub mod run;

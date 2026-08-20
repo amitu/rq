@@ -730,3 +730,115 @@ fn an_unreadable_jar_is_reported_not_ignored() {
         "expected the bad jar to be named:\n{text}"
     );
 }
+
+// --- `--log`: a panel over more than one process -----------------------------------------
+
+/// One line per request, appended, across separate invocations.
+#[test]
+fn the_log_appends_a_line_per_request_across_runs() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+    let log = p.join("net.jsonl");
+
+    for _ in 0..2 {
+        let out = rq_in(p, &["r", "me", "--log", log.to_str().unwrap()]);
+        assert!(
+            out.status.code() == Some(0) || out.status.code() == Some(1),
+            "{}",
+            stderr(&out)
+        );
+    }
+
+    let text = std::fs::read_to_string(&log).unwrap();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 2, "one line per request:\n{text}");
+
+    // Every line stands alone — that is the point of the format.
+    let entries: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|l| serde_json::from_str(l).expect("each line parses by itself"))
+        .collect();
+    assert_eq!(entries[0]["method"], "GET");
+    assert_eq!(entries[0]["name"], "me");
+    assert!(entries[0]["status"].is_number(), "{:#}", entries[0]);
+    // Two invocations, two run ids.
+    assert_ne!(entries[0]["run"], entries[1]["run"]);
+}
+
+/// `--log` with no path writes `.rq/log.jsonl`, and without the flag nothing is written.
+#[test]
+fn the_log_is_opt_in_and_defaults_into_the_state_dir() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+
+    rq_in(p, &["r", "me"]);
+    assert!(
+        !p.join(".rq").join("log.jsonl").exists(),
+        "a log appeared without being asked for"
+    );
+
+    rq_in(p, &["r", "me", "--log"]);
+    assert!(
+        p.join(".rq").join("log.jsonl").is_file(),
+        "expected .rq/log.jsonl"
+    );
+}
+
+/// A secret that the terminal redacts must not be sitting in the file afterwards. A log
+/// outlives the run; writing the credential it borrowed would be the whole point missed.
+#[test]
+fn secrets_are_redacted_on_the_way_into_the_log() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+    let log = p.join("net.jsonl");
+    std::fs::write(
+        p.join("secret.md"),
+        format!(
+            "---\nurl: {}/me\nheaders:\n  Authorization: Bearer {{{{TOKEN}}}}\nvars:\n  \
+             TOKEN: {{ default: \"supersecret-value-123\", secret: true }}\n---\n",
+            f.server.base_url
+        ),
+    )
+    .unwrap();
+
+    rq_in(p, &["r", "secret", "--log", log.to_str().unwrap()]);
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        !text.contains("supersecret-value-123"),
+        "the secret reached the log:\n{text}"
+    );
+    assert!(
+        text.contains("Bearer"),
+        "the header itself should still be there:\n{text}"
+    );
+}
+
+/// A half-written last line — a killed process — costs that request, not the file.
+#[test]
+fn a_torn_line_is_skipped_not_fatal() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+    let log = p.join("net.jsonl");
+
+    rq_in(p, &["r", "me", "--log", log.to_str().unwrap()]);
+    // Append a truncated line, the way a kill -9 mid-write would.
+    let mut text = std::fs::read_to_string(&log).unwrap();
+    text.push_str("{\"at\":123,\"run\":\"aa\",\"name\":\"half\",\"met");
+    std::fs::write(&log, text).unwrap();
+
+    let (entries, skipped) = rq::log::read(&log);
+    assert_eq!(entries.len(), 1, "the good line survives");
+    assert_eq!(skipped, 1, "and the torn one is counted, not ignored");
+
+    // And rq keeps working against that file.
+    let out = rq_in(p, &["r", "me", "--log", log.to_str().unwrap()]);
+    assert!(
+        out.status.code() == Some(0) || out.status.code() == Some(1),
+        "{}",
+        stderr(&out)
+    );
+}

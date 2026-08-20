@@ -31,6 +31,10 @@ pub struct RunOptions {
     /// `--cookies [FILE]`: keep the jar here between runs. `None` = the jar dies with the
     /// process, which is the default because session cookies are credentials.
     pub cookies: Option<std::path::PathBuf>,
+    /// `--log [FILE]`: append every request to this file, so the console can be a panel over
+    /// more than one process. `None` = this run only, which is the default for the same
+    /// reason cookies are: a request log holds whatever you sent.
+    pub log: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +74,10 @@ impl Step {
 
 #[derive(Clone, Debug)]
 pub struct Run {
+    /// The id this run's requests were written under, when `--log` is on. The console uses it
+    /// to leave them out of the "earlier requests" page — they are the page you are already
+    /// looking at, and showing them twice reads like the request went out twice.
+    pub log_id: Option<String>,
     pub steps: Vec<Step>,
     /// The rendered `-- view --` of the requested step, when it has one.
     pub view: Option<String>,
@@ -403,6 +411,7 @@ pub fn run(
                 .collect();
             steps.push(step);
             let mut run = Run {
+                log_id: None,
                 steps,
                 view,
                 raw,
@@ -412,6 +421,24 @@ pub fn run(
             };
             run.secrets.sort();
             run.secrets.dedup();
+            if let Some(path) = &opts.log {
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                // One id for the invocation, so a chain's steps stay together in the file.
+                let id = format!("{at:x}-{:04x}", std::process::id() & 0xffff);
+                let entries: Vec<crate::log::Entry> = run
+                    .steps
+                    .iter()
+                    .map(|s| crate::log::Entry::of(s, &id, at, &run.secrets))
+                    .collect();
+                if let Err(e) = crate::log::append(path, &entries) {
+                    run.notes
+                        .push(format!("could not write {}: {e}", path.display()));
+                }
+                run.log_id = Some(id);
+            }
             if let Some(path) = &opts.cookies {
                 match jar.save(path) {
                     Ok(()) => run.notes.push(format!(

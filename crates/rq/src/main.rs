@@ -50,6 +50,13 @@ struct Cli {
     #[arg(long, global = true, value_name = "FILE", num_args = 0..=1, default_missing_value = None)]
     cookies: Option<Option<PathBuf>>,
 
+    /// Log every request to this file — `--log` alone uses `.rq/log.jsonl`.
+    ///
+    /// The console then shows what you sent before this process, not just this run. One JSON
+    /// object per line: `tail -f` it, `jq` it, `rm` it. Secrets are redacted going in.
+    #[arg(long, global = true, value_name = "FILE", num_args = 0..=1, default_missing_value = None)]
+    log: Option<Option<PathBuf>>,
+
     /// When to colour output.
     #[arg(long, global = true, value_enum, default_value = "auto")]
     color: Color,
@@ -741,13 +748,17 @@ fn print_run(outcome: &run::Run, args: &RunArgs) {
     }
 }
 
-/// Where the jar lives for this invocation, if it is being kept at all.
+/// Resolve one of the optional-path flags (`--cookies`, `--log`).
 ///
-/// `--cookies` with no path means `.rq/cookies.json` beside the project, which is gitignored.
-/// A collection read in place has no `.rq/` of its own — its "root" is the source file — so
-/// the default lands beside that file instead of inside it.
-fn cookie_path(cli: &Cli, project: &Project) -> Option<PathBuf> {
-    let chosen = cli.cookies.as_ref()?;
+/// Absent means off. Present with no path means `.rq/<default>` beside the project, which is
+/// gitignored. A collection read in place has no `.rq/` of its own — its "root" is the source
+/// file — so the default lands beside that file instead of inside it.
+fn state_file(
+    chosen: Option<&Option<PathBuf>>,
+    project: &Project,
+    default: &str,
+) -> Option<PathBuf> {
+    let chosen = chosen?;
     if let Some(explicit) = chosen {
         return Some(explicit.clone());
     }
@@ -760,7 +771,7 @@ fn cookie_path(cli: &Cli, project: &Project) -> Option<PathBuf> {
     } else {
         project.root.clone()
     };
-    Some(base.join(project::STATE_DIR).join("cookies.json"))
+    Some(base.join(project::STATE_DIR).join(default))
 }
 
 fn run_request(cli: &Cli, project: &Project, args: &RunArgs) -> Result<i32> {
@@ -777,7 +788,8 @@ fn run_request(cli: &Cli, project: &Project, args: &RunArgs) -> Result<i32> {
         interactive: vars::stdin_is_interactive(),
         strict: args.strict,
         script_timeout_ms: args.script_timeout,
-        cookies: cookie_path(cli, project),
+        cookies: state_file(cli.cookies.as_ref(), project, "cookies.json"),
+        log: state_file(cli.log.as_ref(), project, "log.jsonl"),
     };
 
     // A request that declares a `-- form --` is asking to be filled in. Show the form —
@@ -836,7 +848,29 @@ fn run_request(cli: &Cli, project: &Project, args: &RunArgs) -> Result<i32> {
                 opts: &console_opts,
                 engine: engine.as_ref(),
             };
-            console::open(outcome.clone(), Some(nav))?;
+            // With `--log`, the console opens over everything sent before this process too.
+            // Bounded: a panel is for looking at recent work, and reading a year of requests
+            // to draw one screen would make `rq r` feel slower the longer you use it.
+            let past: Vec<rq::run::Step> = match &opts.log {
+                Some(path) => {
+                    let (entries, skipped) = rq::log::tail(path, 200);
+                    if skipped > 0 {
+                        ui::note(&format!(
+                            "{} line(s) in {} could not be read and were skipped",
+                            skipped,
+                            path.display()
+                        ));
+                    }
+                    entries
+                        .into_iter()
+                        // Not this run: those steps ARE the page in front of you.
+                        .filter(|e| Some(&e.run) != outcome.log_id.as_ref())
+                        .map(rq::log::Entry::into_step)
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            console::open_with_past(outcome.clone(), Some(nav), past)?;
         }
     } else if args.console {
         ui::note("--console needs a terminal; printed the run instead");
