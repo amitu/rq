@@ -8,9 +8,10 @@
 //!
 //! The rule for severity is deliberately mechanical: **Error** is something that cannot work
 //! — a file that does not parse, a parent that does not resolve, a body file that is not
-//! there. **Warning** is something a run does anyway while telling you it did, and the
-//! canonical case is an unresolved variable: rq notes it and sends the text as written, so
-//! calling it an error here would contradict what the run actually does.
+//! there, a `{{name}}` nothing provides. **Warning** is something a run does anyway while
+//! telling you it did: a reader coercion, two requests sharing a short name, a conversion that
+//! carried less than it had. The line is drawn where a run draws it, so `check` can never
+//! disagree with what running the thing would do.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::PathBuf;
@@ -232,9 +233,10 @@ fn check_document(
         }
     }
 
-    // Variables nothing provides. A run substitutes what it can, notes the rest, and sends
-    // them **as written** — which is how `Authorization: Bearer {{TOKEN}}` becomes a 401 that
-    // looks like a credentials problem rather than a spelling one.
+    // Variables nothing provides. A run REFUSES to send a request that still has one, so this
+    // is an error here too: `check` and `run` must not disagree about what is fatal. It was a
+    // warning while a run sent `{{TOKEN}}` as written; that behaviour is gone, and so is the
+    // warning.
     let mut known: HashSet<String> = ambient.clone();
     for i in project.ancestors(idx).into_iter().chain([idx]) {
         if let Ok((d, _)) = project.load(i) {
@@ -261,8 +263,11 @@ fn check_document(
     for name in used_variables(doc) {
         if !known.contains(&name) {
             out.push(
-                Finding::warn(at, format!("`{{{{{name}}}}}` — nothing provides a value"))
-                    .with_hint("a run sends it as written; declare it under `vars:`, put it in the environment, or pass `--var`"),
+                Finding::error(at, format!("`{{{{{name}}}}}` — nothing provides a value"))
+                    .with_hint(
+                        "a run will refuse to send this; declare it under `vars:` (which may \
+                         legitimately be empty), put it in the environment, or pass `--var`",
+                    ),
             );
         }
     }

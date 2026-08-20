@@ -137,9 +137,20 @@ vars:
   output.
 - `required` — the run fails rather than sending an empty value.
 
-An unresolved `{{name}}` is **left exactly as written** and reported. A request that goes
-out with a literal `{{token}}` is a visible bug; one that goes out with an empty header is
-a mystery. `--strict` turns any such note into a non-zero exit.
+A `{{name}}` nothing provides **stops the request**. It is not sent, the run exits 2, and the
+error names the variable and how to supply it. A placeholder on the wire is always a bug —
+`Authorization: Bearer {{TOKEN}}` comes back 401 and reads like a credentials problem, so you
+go looking at the API rather than at your file, after the request has already gone out.
+
+Declaring the name is how you say it may legitimately be absent:
+
+```yaml
+vars:
+  GH_TOKEN: { env: GH_TOKEN, secret: true }   # unset is fine — resolves to empty
+```
+
+A declared variable always has a value, even if that value is empty, and an empty credential is
+dropped rather than sent. `required: true` is how you say empty is not acceptable either.
 
 ---
 

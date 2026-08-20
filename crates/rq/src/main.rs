@@ -369,10 +369,14 @@ fn open_at(cli: &Cli, explicit: Option<&Path>, cwd: &Path) -> Result<Project> {
     // Reading a foreign collection is not a silent act: say what was read and as what, so a
     // surprising result is traceable to the guess that produced it. Narration, so it lands on
     // stderr and never in piped data.
+    //
+    // It used to end with ", nothing written", which was reassurance nobody asked for: rq
+    // reads projects, `curl --save-as` saves and `import` imports, and announcing an absence
+    // invites the question of when the absence might stop. Say what happened.
     if let Some((from, format)) = project.converted_from() {
         let requests = project.requests().count();
         eprintln!(
-            "{} {} {} as {} — {} request{}, nothing written",
+            "{} {} {} as {} — {} request{}",
             ui::dim("reading"),
             ui::bold(&from.file_name().unwrap_or_default().to_string_lossy()),
             ui::dim("in place"),
@@ -386,7 +390,7 @@ fn open_at(cli: &Cli, explicit: Option<&Path>, cwd: &Path) -> Result<Project> {
         if let Some(report) = &report {
             if let Some(summary) = conversion_summary(report) {
                 ui::note(&format!(
-                    "{summary} — `rq import {}` writes it out and lists them",
+                    "{summary} — `rq import {}` makes it a project and lists them",
                     from.display()
                 ));
             }

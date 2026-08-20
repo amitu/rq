@@ -152,6 +152,15 @@ Open issues, newest first.
     </li>
   </ul>
   <p>
+    The strongest version of that instinct is refusing to act at all. A request that still
+    carries <code>{{TOKEN}}</code> is <strong>not sent</strong>: a placeholder on the wire is
+    always a bug, and the symptom it produces — a 401 that reads like a credentials problem —
+    sends you to the API rather than to your file, after the request has gone out. Erring
+    toward strictness costs one command; the alternative costs an afternoon. Declaring a
+    variable is how you say it may legitimately be empty, and an empty credential is dropped
+    rather than sent.
+  </p>
+  <p>
     The same instinct shows up in <code>rq check</code>, which reads every file the way a run
     would and reports what a run would trip over — a <code>parents:</code> naming something that
     was renamed, a <code>capture:</code> path that can never match, a view template that stopped
@@ -201,7 +210,7 @@ Open issues, newest first.
   <p>Working today:</p>
   <ul>
     <li>Postman (v1.0, v2.0, v2.1), Bruno, cURL and rq projects in; rq, Postman v2.1, Bruno and two Requestly shapes out.</li>
-    <li>Reading a foreign collection <strong>in place</strong> — point rq at a Postman export and run it, with nothing written to that folder.</li>
+    <li>Reading a foreign collection <strong>in place</strong> — point rq at a Postman export and run it as it is.</li>
     <li>Chaining and capture without code; variables, environments, secrets that stay redacted.</li>
     <li>Scripts, including <code>pm.*</code> and <code>bru.*</code>, with no Node installed.</li>
     <li>The console, <code>rq check</code>, <code>rq fmt</code>, <code>--json</code> for CI, persistent cookies and a network log.</li>

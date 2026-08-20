@@ -210,6 +210,15 @@ pub fn resolve_declared(
             vars.layer("default", [(name.clone(), resolved)]);
         }
 
+        // A declared name always ends up with a value, even if that value is empty. Declaring
+        // it is the author saying "this exists and may be absent" — `GH_TOKEN: { env: … }` on
+        // a collection whose public requests work anonymously is the whole shape of it. That
+        // is what separates it from a name nobody declared, which is a typo, and which a run
+        // now refuses to send.
+        if vars.get(name).is_none() {
+            vars.layer("unset", [(name.clone(), String::new())]);
+        }
+
         if spec.required && vars.get(name).map(str::is_empty).unwrap_or(true) {
             bail!(
                 "`{name}` is required but unset\n  pass `--var {name}=…`{}",

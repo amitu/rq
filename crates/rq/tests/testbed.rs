@@ -842,3 +842,68 @@ fn a_torn_line_is_skipped_not_fatal() {
         stderr(&out)
     );
 }
+
+// --- placeholders never reach the wire ----------------------------------------------------
+
+/// A `{{name}}` nothing provides stops the request, and the socket sees nothing.
+///
+/// This is the policy: a placeholder on the wire is always a bug. `Bearer {{TOKEN}}` returns
+/// 401 and reads like a credentials problem, so you go looking at the API instead of at your
+/// file — after the request has already been sent.
+#[test]
+fn a_request_carrying_a_placeholder_is_not_sent() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+    std::fs::write(
+        p.join("typo.md"),
+        format!(
+            "---\nurl: {}/me\nheaders:\n  Authorization: Bearer {{{{TOKEN}}}}\n---\n",
+            f.server.base_url
+        ),
+    )
+    .unwrap();
+
+    let out = rq_in(p, &["r", "typo"]);
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("was not sent"), "{text}");
+    assert!(text.contains("TOKEN"), "{text}");
+    assert!(
+        text.contains("--var TOKEN="),
+        "it should say how to fix it:\n{text}"
+    );
+}
+
+/// A DECLARED variable may legitimately be empty, and that still runs.
+///
+/// This is the line between the two: declaring the name is the author saying it exists and may
+/// be absent — a collection whose public requests work without a token is the shape — while an
+/// undeclared name is a typo. The auth layer drops an empty credential rather than sending one.
+#[test]
+fn a_declared_variable_that_is_empty_still_runs() {
+    let f = Fixture::new();
+    let project = unlinked_project(&f.server.base_url);
+    let p = project.path();
+    std::fs::write(
+        p.join("anon.md"),
+        format!(
+            "---\nurl: {}/me\nauth: {{ type: bearer, token: '{{{{MAYBE}}}}' }}\nvars:\n  \
+             MAYBE: {{ env: RQ_NOT_SET_ANYWHERE }}\n---\n",
+            f.server.base_url
+        ),
+    )
+    .unwrap();
+
+    let out = rq_in(p, &["r", "anon"]);
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    // It reached the server — anonymously, and 401 is the server's answer, not rq refusing.
+    // (The auth layer's own note also says "was not sent", about the header, so match the
+    // refusal's exact wording rather than a fragment both share.)
+    assert!(text.contains("401"), "{text}");
+    assert!(!text.contains("so the request was not sent"), "{text}");
+    assert!(
+        text.contains("auth `bearer` was not sent"),
+        "the empty credential should be dropped and reported:\n{text}"
+    );
+}
