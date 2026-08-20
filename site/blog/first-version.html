@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rq 0.1: plain files, honest conversions, and what is still missing</title>
+<meta name="description" content="What rq is, the rules it was built under, and an honest account of what works and what does not.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="../">rq</a>
+    <nav>
+      <a href="../">Home</a>
+      <a href="./">Blog</a>
+      <a href="https://github.com/browserstack/rq">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <h1>rq 0.1: plain files, honest conversions, and what is still missing</h1>
+  <p class="meta">2026-08-20</p>
+
+  <p class="lede">
+    A terminal API client whose requests are Markdown files, which runs the collection you
+    already have, and which tells you what it could not carry across. Here is what it does,
+    the handful of rules it was built under, and the parts that are not built yet.
+  </p>
+
+  <h2>The shape of it</h2>
+
+  <p>
+    A request is one Markdown file. Frontmatter for the parts a machine reads, sections for the
+    parts a person writes.
+  </p>
+
+  <div class="file">
+    <div class="name">github/issues.md</div>
+<pre>---
+url: '{{api}}/repos/{{owner}}/{{repo}}/issues'
+query:
+  state: open
+capture:
+  first: response[0].number
+---
+
+-- description --
+
+Open issues, newest first.
+
+-- view --
+
+{% for i in response %}
+- [**#{{ i.number }}**]({{ i.html_url }}) {{ i.title }} — {{ i.comments }} comments
+{% endfor %}</pre>
+  </div>
+
+  <p>
+    Three things follow from that choice, and they are most of what makes the tool feel
+    different. Your requests diff and review like code, because they are text in your repo.
+    They are editable by anything — an editor, a script, <code>sed</code> — because nothing is
+    hidden in a database. And a request can carry a <em>view</em>: a template that renders the
+    response into something legible, so the thing you look at fifty times a day is the thing you
+    shaped rather than a wall of JSON.
+  </p>
+
+  <h2>Six rules</h2>
+
+  <h3>1. Never rename someone's code</h3>
+  <p>
+    Every converter in this space is tempted to string-replace <code>pm.</code> with its own
+    prefix. That imports clean and throws at run time, which is the worst possible order to
+    discover a problem in. So a converted script is carried <strong>verbatim</strong>, with the
+    dialect it was written in recorded next to it, and the runtime reconciles it at execution —
+    every run, against a parser rather than a regex.
+  </p>
+  <p>
+    The practical payoff is that your file keeps the script its author wrote, so exporting back
+    to Postman gives back Postman; and improving the translation improves every project that
+    already exists, without re-importing anything.
+  </p>
+
+  <h3>2. Report what you could not carry</h3>
+  <p>
+    Conversions lose things. A tool that pretends otherwise is worse than one that loses less
+    and says so. Every conversion produces diagnostics with the file they came from, and the
+    fidelity tests assert more than "it parsed": every request in the source has to survive into
+    the model, and round-trip loss has to stay inside a documented allowlist. When something new
+    starts being dropped, a test fails.
+  </p>
+
+  <h3>3. stdout is the result, stderr is the narration</h3>
+  <p>
+    The step tree, the captured values, the test lines and the notes go to stderr. The result —
+    the rendered view, or <code>--json</code>, or the raw body — goes to stdout. So the payload
+    is byte-identical whether you are watching or piping, and the only things that change when
+    nothing is attached to the terminal are where the narration lands and whether the console
+    opens.
+  </p>
+  <p>
+    This one arrived by being wrong first. An earlier version changed <em>what you got</em>
+    depending on whether stdout was a terminal, which is exactly the kind of cleverness you have
+    to remember.
+  </p>
+
+  <h3>4. The path is the interface</h3>
+  <p>
+    Two flags keep state between runs, and neither of them brought a subcommand with it:
+  </p>
+  <div class="term"><span class="c">$</span> rq r login --cookies          <span class="c"># .rq/cookies.json, or name a file</span>
+<span class="c">$</span> rq r issues --log             <span class="c"># .rq/log.jsonl, or name a file</span>
+<span class="c">$</span> cat .rq/cookies.json          <span class="c"># there is nothing to wrap</span>
+<span class="c">$</span> rm .rq/cookies.json           <span class="c"># and that is how you log out</span>
+</div>
+  <p>
+    There is no <code>rq cookies list</code> and no <code>rq log clear</code>, because a path
+    needs neither. Every command a tool does not add is one nobody has to discover. The log is
+    JSONL for the same reason: appending is a write rather than a rewrite, a torn line costs one
+    request instead of the whole history, and <code>tail -f</code> and <code>jq</code> already
+    know what to do with it.
+  </p>
+  <p>
+    Both are off by default. Session cookies are credentials, and a client that stored yours
+    without being asked would be storing them without consent.
+  </p>
+
+  <h3>5. Loud failures, and no false greens</h3>
+  <p>
+    The failure this project is most organised against is the one that looks fine. A few of the
+    shapes it takes, all of which happened here:
+  </p>
+  <ul>
+    <li>
+      A test corpus that had been quietly truncated to 7% of its files by a throttled download.
+      Every assertion still passed — they compared the parse against whatever was on disk. The
+      corpora now assert their pinned size, because a corpus is pinned by commit, so its size is
+      a fact rather than a range.
+    </li>
+    <li>
+      A missing script engine that silently skipped the script. It is now a reported
+      non-execution: the request succeeded and only the script did not, and losing the response
+      over it would be the worse answer.
+    </li>
+    <li>
+      A cookie jar that could not be read. Starting empty in silence looks exactly like the
+      server logging you out, and sends you debugging the wrong end.
+    </li>
+  </ul>
+  <p>
+    The same instinct shows up in <code>rq check</code>, which reads every file the way a run
+    would and reports what a run would trip over — a <code>parents:</code> naming something that
+    was renamed, a <code>capture:</code> path that can never match, a view template that stopped
+    parsing.
+  </p>
+
+  <h3>6. Do not build an editor</h3>
+  <p>
+    A request is a Markdown file, so the editor you already use is better at editing it than
+    anything we would write. <code>rq e &lt;name&gt;</code> hands the file to
+    <code>$EDITOR</code> and gets out of the way. That is not a gap waiting to be filled; it is
+    the answer.
+  </p>
+
+  <h2>The engine question</h2>
+
+  <p>
+    Scripts run on a QuickJS runtime with the same API the Requestly app uses, so a collection
+    behaves the same in both places. The interesting part is how that runtime got into a Rust
+    binary.
+  </p>
+  <p>
+    It started as a Node sidecar: <code>rq</code> spawned <code>node</code> against a checked-out
+    copy of the JavaScript engine. That works on a development machine and nowhere else — a
+    downloaded binary has no <code>npm install</code> beside it — which would have made scripting
+    a feature only contributors had.
+  </p>
+  <p>
+    What made the fix cheap was noticing that the engine builds its guest environment out of
+    <em>source strings</em>: the API surface, the shims, the assertion library, the require chain.
+    So the package now generates those strings as data, and the binary evaluates them in an
+    in-process QuickJS, in the package's own order. Nothing about the API is reimplemented in
+    Rust. The semantics still have exactly one owner, and a change there reaches the CLI by
+    regenerating a file rather than by porting anything.
+  </p>
+  <p>
+    Postman and Bruno then arrive by two different routes, and the difference is worth stating
+    because it is not arbitrary. Postman has to be <em>rewritten</em>: its v1 scripts say
+    <code>tests['ok'] = responseCode.code === 200</code>, an assignment to a subscript, which no
+    runtime object can intercept. Bruno needs no rewriting at all: <code>bru</code>,
+    <code>req</code> and <code>res</code> are objects, so the runtime simply provides them — and
+    a shim survives aliasing that a static rewrite would miss.
+  </p>
+
+  <h2>Where this actually is</h2>
+
+  <p>Working today:</p>
+  <ul>
+    <li>Postman (v1.0, v2.0, v2.1), Bruno, cURL and rq projects in; rq, Postman v2.1, Bruno and two Requestly shapes out.</li>
+    <li>Reading a foreign collection <strong>in place</strong> — point rq at a Postman export and run it, with nothing written to that folder.</li>
+    <li>Chaining and capture without code; variables, environments, secrets that stay redacted.</li>
+    <li>Scripts, including <code>pm.*</code> and <code>bru.*</code>, with no Node installed.</li>
+    <li>The console, <code>rq check</code>, <code>rq fmt</code>, <code>--json</code> for CI, persistent cookies and a network log.</li>
+  </ul>
+
+  <p>Not built, in rough order of how much it matters:</p>
+  <ul>
+    <li>
+      <strong>Packaged binaries.</strong> No tap, no apt repo, no release artifacts. Everything
+      above is invisible to anyone unwilling to compile it, which makes this the next thing.
+    </li>
+    <li>
+      <strong>Data-driven runs and a JUnit reporter</strong> — the shape you want when a
+      collection lives in a pipeline.
+    </li>
+    <li>
+      <strong>Saved response examples</strong>, which are also a fidelity gap today: the model
+      carries them and rq drops them.
+    </li>
+    <li><strong>More formats</strong> — OpenAPI first.</li>
+  </ul>
+
+  <div class="note">
+    <strong>0.1 means 0.1.</strong> The file format is documented and tested, and it is also new
+    enough that it may still move. If you keep a collection in it, keep it in git — which is
+    rather the point of the format.
+  </div>
+
+  <p>
+    Everything is MIT licensed, has no telemetry and no account, and lives at
+    <a href="https://github.com/browserstack/rq">github.com/browserstack/rq</a>.
+  </p>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    MIT licensed · no telemetry, no account ·
+    <a href="https://github.com/browserstack/rq">github.com/browserstack/rq</a>
+  </div>
+</footer>
+
+</body>
+</html>
