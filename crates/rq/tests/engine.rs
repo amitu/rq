@@ -429,14 +429,14 @@ fn case_an_unimplemented_bruno_api_says_so(engine: Engine) {
         "thing",
         &format!(
             "---\nurl: {}/thing\nscript_dialect: bru\n---\n\n-- post --\n\n\
-             bru.interpolate('{{{{x}}}}');\n",
+             bru.cwd();\n",
             stub.base
         ),
     );
 
     let (_, err, _) = f.run(&["r", "thing"]);
     assert!(
-        err.contains("bru.interpolate()") && err.contains("rather than continuing"),
+        err.contains("bru.cwd()") && err.contains("rather than continuing"),
         "on the {} engine, the failure should name the call:\n{err}",
         engine.label()
     );
