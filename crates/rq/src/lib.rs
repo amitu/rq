@@ -6,6 +6,7 @@ pub mod console;
 pub mod cookies;
 pub mod embedded;
 pub mod graph;
+pub mod highlight;
 pub mod http;
 pub mod import;
 pub mod log;

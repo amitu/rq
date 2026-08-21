@@ -24,6 +24,9 @@ anyhow.workspace = true
 serde_norway = "0.9"
 # The `-- view --` renderer. Jinja-compatible, pure Rust, no unsafe.
 minijinja = { version = "2", features = ["loader"] }
+# Response-body syntax highlighting. `default-fancy` swaps onig (a C library) for the pure-Rust
+# fancy-regex engine — keeps the "pure Rust, no unsafe" posture.
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 # Blocking HTTP with rustls. No async runtime: `rq r` is one request at a time.
 ureq = { version = "3", features = ["json"] }
 # Secret-shaped prompts read without echo.

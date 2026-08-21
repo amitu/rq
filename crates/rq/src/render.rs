@@ -431,15 +431,20 @@ fn find_pair(chars: &[char], from: usize) -> Option<usize> {
     (from..chars.len().saturating_sub(1)).find(|i| chars[*i] == '*' && chars[*i + 1] == '*')
 }
 
-/// What to print when a request has no `-- view --`: pretty JSON, or the body as it came.
-/// When colour is on and the body is JSON, the pretty print is syntax-highlighted; with colour
-/// off (piped, `--color never`, `NO_COLOR`) it is byte-for-byte the plain `to_string_pretty`, so
+/// What to print when a request has no `-- view --`: pretty (and, with colour on, highlighted)
+/// JSON, or the body as it came — syntax-highlighted from its `Content-Type` when that maps to a
+/// known grammar (HTML/XML/JS/CSS/YAML). With colour off (piped, `--color never`, `NO_COLOR`)
+/// JSON is byte-for-byte the plain `to_string_pretty` and everything else is the raw body, so
 /// nothing downstream sees escape codes.
-pub fn default_body(body: &str, json: Option<&serde_json::Value>) -> String {
+pub fn default_body(
+    body: &str,
+    json: Option<&serde_json::Value>,
+    content_type: Option<&str>,
+) -> String {
     match json {
         Some(v) if ui::color_enabled() => highlight_json(v),
         Some(v) => serde_json::to_string_pretty(v).unwrap_or_else(|_| body.to_string()),
-        None => body.to_string(),
+        None => crate::highlight::highlight(body, content_type).unwrap_or_else(|| body.to_string()),
     }
 }
 
@@ -557,7 +562,10 @@ mod tests {
         // EITHER state: stripping any escape codes yields serde's exact pretty print. Highlighting
         // only ever adds colour — it never changes the JSON text, indentation, or key order.
         assert_eq!(strip_ansi(&highlight_json(&v)), plain);
-        assert_eq!(strip_ansi(&default_body("", Some(&v))), plain);
+        assert_eq!(
+            strip_ansi(&default_body("", Some(&v), Some("application/json"))),
+            plain
+        );
     }
 
     /// Drop CSI escape sequences (`ESC [ … m`) so the underlying text can be compared.

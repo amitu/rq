@@ -391,7 +391,9 @@ pub fn run(
                 _ => None,
             };
             let raw = match &step.response {
-                Some(r) => render::default_body(&r.body, r.json().as_ref()),
+                Some(r) => {
+                    render::default_body(&r.body, r.json().as_ref(), r.header("content-type"))
+                }
                 None => String::new(),
             };
             let resolved = v
