@@ -60,12 +60,25 @@ pub fn detect_format(path: &Path, content: &str) -> Option<&'static str> {
         return Some("rq");
     }
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(head) {
+        // OpenAPI/Swagger BEFORE Postman: an OpenAPI doc also has a top-level `info`, so the
+        // Postman `info` check below would otherwise claim it. The `openapi`/`swagger` version
+        // key is the unambiguous discriminator.
+        if json.get("openapi").is_some() || json.get("swagger").is_some() {
+            return Some("openapi");
+        }
         if json.get("info").is_some() || json.get("_postman_id").is_some() {
             return Some("postman");
         }
     }
     if head.contains("\nget {") || head.starts_with("meta {") || head.contains("\npost {") {
         return Some("bruno");
+    }
+    // OpenAPI is commonly YAML, which the JSON parse above won't read. Try YAML last and only
+    // claim it on the `openapi`/`swagger` key, so this never misclassifies another format.
+    if let Ok(yaml) = serde_norway::from_str::<serde_json::Value>(head) {
+        if yaml.get("openapi").is_some() || yaml.get("swagger").is_some() {
+            return Some("openapi");
+        }
     }
     None
 }
@@ -152,7 +165,7 @@ pub fn to_project_map(
         None => detected
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "could not tell what {} is — pass --from postman|bruno|curl|rq",
+                    "could not tell what {} is — pass --from postman|bruno|curl|openapi|rq",
                     path.display()
                 )
             })?
@@ -241,5 +254,68 @@ mod tests {
             Some("rq")
         );
         assert_eq!(detect_format(Path::new("x.txt"), "nonsense"), None);
+    }
+
+    #[test]
+    fn detects_openapi_json_yaml_and_swagger() {
+        // JSON 3.x — and NOT misread as Postman despite the top-level `info`.
+        assert_eq!(
+            detect_format(
+                Path::new("spec.json"),
+                "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"X\"}, \"paths\": {}}"
+            ),
+            Some("openapi")
+        );
+        // Swagger 2.0.
+        assert_eq!(
+            detect_format(
+                Path::new("spec.json"),
+                "{\"swagger\": \"2.0\", \"info\": {}}"
+            ),
+            Some("openapi")
+        );
+        // YAML (the JSON parse won't read it).
+        assert_eq!(
+            detect_format(
+                Path::new("spec.yaml"),
+                "openapi: 3.1.0\ninfo:\n  title: Y\npaths: {}\n"
+            ),
+            Some("openapi")
+        );
+        // A Postman collection (info + item, no openapi/swagger) is still Postman.
+        assert_eq!(
+            detect_format(
+                Path::new("c.json"),
+                "{\"info\": {\"schema\": \"...\"}, \"item\": []}"
+            ),
+            Some("postman")
+        );
+    }
+
+    #[test]
+    fn imports_an_openapi_spec_by_auto_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = dir.path().join("spec.yaml");
+        std::fs::write(
+            &spec,
+            "openapi: 3.0.0\ninfo:\n  title: Pets\nservers:\n  - url: https://api.example.com\npaths:\n  /pets:\n    get:\n      summary: List pets\n      responses:\n        '200':\n          description: ok\n",
+        )
+        .unwrap();
+        let mut report = cq_report::Report::new(cq_report::Fidelity::Lossless);
+        // No forced format — the CLI figures it out.
+        let (map, format) = to_project_map(&spec, None, &mut report).unwrap();
+        assert_eq!(format, "openapi", "auto-detected from the spec, no --from");
+        // The spec became a real rq project: the request under its path folder, and the server
+        // as an environment.
+        assert!(
+            map.keys().any(|k| k.ends_with("List-pets.md")),
+            "expected the converted request file; keys={:?}",
+            map.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            map.keys().any(|k| k.starts_with("env/")),
+            "expected the server to become an environment; keys={:?}",
+            map.keys().collect::<Vec<_>>()
+        );
     }
 }
