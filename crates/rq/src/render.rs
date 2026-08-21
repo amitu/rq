@@ -432,10 +432,65 @@ fn find_pair(chars: &[char], from: usize) -> Option<usize> {
 }
 
 /// What to print when a request has no `-- view --`: pretty JSON, or the body as it came.
+/// When colour is on and the body is JSON, the pretty print is syntax-highlighted; with colour
+/// off (piped, `--color never`, `NO_COLOR`) it is byte-for-byte the plain `to_string_pretty`, so
+/// nothing downstream sees escape codes.
 pub fn default_body(body: &str, json: Option<&serde_json::Value>) -> String {
     match json {
+        Some(v) if ui::color_enabled() => highlight_json(v),
         Some(v) => serde_json::to_string_pretty(v).unwrap_or_else(|_| body.to_string()),
         None => body.to_string(),
+    }
+}
+
+/// Pretty-print a JSON value with 2-space indent (matching `serde_json::to_string_pretty`),
+/// colouring by token kind: keys blue, strings green, numbers/bools yellow, null dim; structural
+/// punctuation stays plain. Only reached when colour is enabled.
+fn highlight_json(v: &serde_json::Value) -> String {
+    let mut out = String::new();
+    write_json(v, 0, &mut out);
+    out
+}
+
+fn write_json(v: &serde_json::Value, depth: usize, out: &mut String) {
+    use serde_json::Value;
+    // A JSON scalar as its exact serialized text (handles string escaping, number formatting).
+    let scalar = |x: &Value| serde_json::to_string(x).unwrap_or_default();
+    match v {
+        Value::Null => out.push_str(&ui::dim("null")),
+        Value::Bool(_) | Value::Number(_) => out.push_str(&ui::yellow(&scalar(v))),
+        Value::String(_) => out.push_str(&ui::green(&scalar(v))),
+        Value::Array(a) if a.is_empty() => out.push_str("[]"),
+        Value::Array(a) => {
+            out.push_str("[\n");
+            for (i, item) in a.iter().enumerate() {
+                indent(out, depth + 1);
+                write_json(item, depth + 1, out);
+                out.push_str(if i + 1 < a.len() { ",\n" } else { "\n" });
+            }
+            indent(out, depth);
+            out.push(']');
+        }
+        Value::Object(m) if m.is_empty() => out.push_str("{}"),
+        Value::Object(m) => {
+            out.push_str("{\n");
+            let last = m.len() - 1;
+            for (i, (k, val)) in m.iter().enumerate() {
+                indent(out, depth + 1);
+                out.push_str(&ui::blue(&scalar(&Value::String(k.clone()))));
+                out.push_str(": ");
+                write_json(val, depth + 1, out);
+                out.push_str(if i < last { ",\n" } else { "\n" });
+            }
+            indent(out, depth);
+            out.push('}');
+        }
+    }
+}
+
+fn indent(out: &mut String, depth: usize) {
+    for _ in 0..depth {
+        out.push_str("  ");
     }
 }
 
@@ -489,5 +544,37 @@ mod tests {
         assert!(out.starts_with("Title\n"), "{out}");
         assert!(out.contains("one code"), "{out}");
         assert!(out.contains("two"), "{out}");
+    }
+
+    #[test]
+    fn json_highlight_never_alters_the_text() {
+        let v = serde_json::json!({
+            "name": "amitu", "age": 30, "ok": true, "tags": ["a", "b"], "meta": null,
+            "nested": { "x": 1 }, "empty": {}, "none": []
+        });
+        let plain = serde_json::to_string_pretty(&v).unwrap();
+        // Colour is a process-global other tests share, so this asserts the property that holds in
+        // EITHER state: stripping any escape codes yields serde's exact pretty print. Highlighting
+        // only ever adds colour — it never changes the JSON text, indentation, or key order.
+        assert_eq!(strip_ansi(&highlight_json(&v)), plain);
+        assert_eq!(strip_ansi(&default_body("", Some(&v))), plain);
+    }
+
+    /// Drop CSI escape sequences (`ESC [ … m`) so the underlying text can be compared.
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for c2 in chars.by_ref() {
+                    if c2 == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 }
