@@ -246,7 +246,11 @@ impl<'a> Console<'a> {
                     // Only the requested step has a rendered view; a parent shows its body.
                     (Some(view), true) => render::markdown_to_terminal(view),
                     _ => match &step.response {
-                        Some(r) => render::default_body(&r.body, r.json().as_ref()),
+                        Some(r) => render::default_body(
+                            &r.body,
+                            r.json().as_ref(),
+                            r.header("content-type"),
+                        ),
                         None => "(not sent)".to_string(),
                     },
                 };
@@ -265,7 +269,7 @@ impl<'a> Console<'a> {
             }
             Pane::Response => match &step.response {
                 Some(r) => lines(&ui::redact(
-                    &render::default_body(&r.body, r.json().as_ref()),
+                    &render::default_body(&r.body, r.json().as_ref(), r.header("content-type")),
                     secrets,
                 )),
                 None => vec![ui::dim("the request was not sent")],
